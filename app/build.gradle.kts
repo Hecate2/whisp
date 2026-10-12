@@ -6,10 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
 val releaseSecretsFile = rootProject.file(".signing/signing.properties")
-val releaseSecrets = Properties().apply {
-    if (releaseSecretsFile.isFile) releaseSecretsFile.inputStream().use { load(it) }
-}
+val releaseSecrets =
+    Properties().apply {
+        if (releaseSecretsFile.isFile) releaseSecretsFile.inputStream().use { load(it) }
+    }
+
 android {
     namespace = "app.whisp"
     compileSdk = 36
@@ -23,18 +26,22 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
-        if (releaseSecretsFile.isFile) create("localRelease") {
-            storeFile = rootProject.file(".signing/${releaseSecrets.getProperty("storeFile")}")
-            storePassword = releaseSecrets.getProperty("storePassword")
-            keyAlias = releaseSecrets.getProperty("keyAlias")
-            keyPassword = releaseSecrets.getProperty("keyPassword")
-        }
+        if (releaseSecretsFile.isFile)
+            create("localRelease") {
+                storeFile = rootProject.file(".signing/${releaseSecrets.getProperty("storeFile")}")
+                storePassword = releaseSecrets.getProperty("storePassword")
+                keyAlias = releaseSecrets.getProperty("keyAlias")
+                keyPassword = releaseSecrets.getProperty("keyPassword")
+            }
     }
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (releaseSecretsFile.isFile) signingConfig = signingConfigs.getByName("localRelease")
         }
     }
@@ -59,7 +66,9 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
+
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.10.01")
     implementation(composeBom)

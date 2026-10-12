@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
+import java.io.File
+import java.util.Properties
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.io.File
-import java.util.Properties
 
 /** Opt-in real, authenticated Samba contract tests; fixtures and credentials are never packaged. */
 class SmbServerTest {
-    @Test fun authenticatedScanRandomAccessAndLargeOffsets(): Unit = runBlocking {
+    @Test
+    fun authenticatedScanRandomAccessAndLargeOffsets(): Unit = runBlocking {
         val config = System.getenv("WHISP_SMB_TEST_CONFIG")
         assumeTrue("Set WHISP_SMB_TEST_CONFIG for the real Samba test", config != null)
         val props = Properties().apply { File(config!!).inputStream().use { load(it) } }
-        val source = SourceEntity("smb-test", "Test", "smb", props.getProperty("root"), props.getProperty("username"))
+        val source =
+            SourceEntity(
+                "smb-test",
+                "Test",
+                "smb",
+                props.getProperty("root"),
+                props.getProperty("username"),
+            )
         val password = props.getProperty("password")
         val client = SmbClient()
         client.check(source, password)
@@ -28,7 +36,9 @@ class SmbServerTest {
             val actual = ByteArray(1021)
             assertEquals(actual.size, reader.read(actual, offset, 0, actual.size))
             java.io.RandomAccessFile(original, "r").use { f ->
-                val expected = ByteArray(actual.size); f.seek(offset); f.readFully(expected)
+                val expected = ByteArray(actual.size)
+                f.seek(offset)
+                f.readFully(expected)
                 assertArrayEquals(expected, actual)
             }
             assertEquals(-1, reader.read(actual, reader.length, 0, 5))
@@ -36,16 +46,27 @@ class SmbServerTest {
         val sparse = entries.single { it.path == "large-offset.bin" }
         val marker = client.range(sparse.uri, source, password, 4_294_967_303L, 5)
         assertArrayEquals("WHISP".toByteArray(), marker)
-        val duration = Mp3Metadata.duration(mp3.size) { offset, length -> client.range(mp3.uri, source, password, offset, length) }
+        val duration =
+            Mp3Metadata.duration(mp3.size) { offset, length ->
+                client.range(mp3.uri, source, password, offset, length)
+            }
         assertTrue("Generated MP3 header duration", duration in 1_850_000..1_854_000)
         // Sequential assets share a session and an MP3's two probes share one file handle.
         client.assets(source, password).use { batch ->
             repeat(3) { assertEquals(duration, batch.duration(mp3.uri)) }
-            assertArrayEquals(File(props.getProperty("fixture"), entries.first { it.path.endsWith(".vtt") }.path).readBytes(),
-                batch.bytes(entries.first { it.path.endsWith(".vtt") }.uri, 1024 * 1024))
+            assertArrayEquals(
+                File(props.getProperty("fixture"), entries.first { it.path.endsWith(".vtt") }.path)
+                    .readBytes(),
+                batch.bytes(entries.first { it.path.endsWith(".vtt") }.uri, 1024 * 1024),
+            )
         }
-        val failure = assertThrows(java.io.IOException::class.java) { client.check(source, "deliberately-wrong") }
+        val failure =
+            assertThrows(java.io.IOException::class.java) {
+                client.check(source, "deliberately-wrong")
+            }
         assertTrue(failure.message!!.contains("账号或密码"))
-        assertThrows(IllegalArgumentException::class.java) { client.bytes(mp3.uri, source, password, 1024) }
+        assertThrows(IllegalArgumentException::class.java) {
+            client.bytes(mp3.uri, source, password, 1024)
+        }
     }
 }

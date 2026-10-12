@@ -18,39 +18,95 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.whisp.data.PrecisionScrubber
 
-@Composable internal fun PrecisionSeekBar(position: Long, duration: Long, enabled: Boolean,
-    loopStart: Long, loopEnd: Long, onPreview: (Long?) -> Unit, onSeek: (Long) -> Unit) {
+@Composable
+internal fun PrecisionSeekBar(
+    position: Long,
+    duration: Long,
+    enabled: Boolean,
+    loopStart: Long,
+    loopEnd: Long,
+    onPreview: (Long?) -> Unit,
+    onSeek: (Long) -> Unit,
+) {
     var drag by remember { mutableStateOf<PrecisionScrubber?>(null) }
     var preview by remember { mutableStateOf<Long?>(null) }
     var fine by remember { mutableStateOf(false) }
     val seek by rememberUpdatedState(onSeek)
     val update by rememberUpdatedState(onPreview)
-    fun clear() { drag = null; preview = null; fine = false; update(null) }
+    fun clear() {
+        drag = null
+        preview = null
+        fine = false
+        update(null)
+    }
     Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.TopCenter) {
-        if (preview != null) Text(if (fine) "${clock(preview!!)} · 精细" else clock(preview!!), color = Rose, fontSize = 14.sp)
-        Canvas(Modifier.fillMaxSize().testTag("seek-bar").semantics {
-            contentDescription = "播放进度"
-            progressBarRangeInfo = ProgressBarRangeInfo(position.toFloat(), 0f..duration.coerceAtLeast(1).toFloat())
-            if (!enabled) disabled()
-            setProgress { value -> if (enabled) { seek(value.toLong().coerceIn(0, duration)); true } else false }
-        }.pointerInput(duration, enabled) {
-            if (enabled) detectTapGestures(onTap = { point -> seek((duration * point.x / size.width).toLong().coerceIn(0, duration)) })
-        }.pointerInput(duration, enabled) {
-            if (enabled) detectDragGestures(
-                onDragStart = { point ->
-                    drag = PrecisionScrubber(duration, size.width.toFloat(), point.x, point.y, 36.dp.toPx())
-                    preview = drag!!.positionMs; update(preview)
-                },
-                onDragCancel = { clear() },
-                onDragEnd = { preview?.let(seek); clear() },
-                onDrag = { change, _ ->
-                    change.consume()
-                    drag?.let { session ->
-                        preview = session.move(change.position.x, change.position.y)
-                        fine = session.fine; update(preview)
+        if (preview != null)
+            Text(
+                if (fine) "${clock(preview!!)} · 精细" else clock(preview!!),
+                color = Rose,
+                fontSize = 14.sp,
+            )
+        Canvas(
+            Modifier.fillMaxSize()
+                .testTag("seek-bar")
+                .semantics {
+                    contentDescription = "播放进度"
+                    progressBarRangeInfo =
+                        ProgressBarRangeInfo(
+                            position.toFloat(),
+                            0f..duration.coerceAtLeast(1).toFloat(),
+                        )
+                    if (!enabled) disabled()
+                    setProgress { value ->
+                        if (enabled) {
+                            seek(value.toLong().coerceIn(0, duration))
+                            true
+                        } else false
                     }
-                })
-        }) {
+                }
+                .pointerInput(duration, enabled) {
+                    if (enabled)
+                        detectTapGestures(
+                            onTap = { point ->
+                                seek(
+                                    (duration * point.x / size.width)
+                                        .toLong()
+                                        .coerceIn(0, duration),
+                                )
+                            },
+                        )
+                }
+                .pointerInput(duration, enabled) {
+                    if (enabled)
+                        detectDragGestures(
+                            onDragStart = { point ->
+                                drag =
+                                    PrecisionScrubber(
+                                        duration,
+                                        size.width.toFloat(),
+                                        point.x,
+                                        point.y,
+                                        36.dp.toPx(),
+                                    )
+                                preview = drag!!.positionMs
+                                update(preview)
+                            },
+                            onDragCancel = { clear() },
+                            onDragEnd = {
+                                preview?.let(seek)
+                                clear()
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                drag?.let { session ->
+                                    preview = session.move(change.position.x, change.position.y)
+                                    fine = session.fine
+                                    update(preview)
+                                }
+                            },
+                        )
+                },
+        ) {
             val start = if (fine) drag?.rangeStart ?: 0 else 0
             val end = if (fine) drag?.rangeEnd ?: duration else duration
             val span = (end - start).coerceAtLeast(1)
@@ -59,10 +115,24 @@ import app.whisp.data.PrecisionScrubber
             val tint = if (enabled) Rose else Muted.copy(alpha = .35f)
             drawLine(Raised, Offset(0f, y), Offset(size.width, y), 4.dp.toPx(), StrokeCap.Round)
             if (loopStart >= 0) {
-                if (loopEnd > loopStart && loopEnd >= start && loopStart <= end) drawLine(Rose.copy(alpha = .35f), Offset(x(loopStart), y), Offset(x(loopEnd), y), 10.dp.toPx(), StrokeCap.Round)
-                listOf(loopStart, loopEnd).filter { it in start..end }.forEach { marker ->
-                    drawLine(Rose, Offset(x(marker), y - 8.dp.toPx()), Offset(x(marker), y + 8.dp.toPx()), 2.dp.toPx())
-                }
+                if (loopEnd > loopStart && loopEnd >= start && loopStart <= end)
+                    drawLine(
+                        Rose.copy(alpha = .35f),
+                        Offset(x(loopStart), y),
+                        Offset(x(loopEnd), y),
+                        10.dp.toPx(),
+                        StrokeCap.Round,
+                    )
+                listOf(loopStart, loopEnd)
+                    .filter { it in start..end }
+                    .forEach { marker ->
+                        drawLine(
+                            Rose,
+                            Offset(x(marker), y - 8.dp.toPx()),
+                            Offset(x(marker), y + 8.dp.toPx()),
+                            2.dp.toPx(),
+                        )
+                    }
             }
             val value = preview ?: position
             drawLine(tint, Offset(0f, y), Offset(x(value), y), 4.dp.toPx(), StrokeCap.Round)

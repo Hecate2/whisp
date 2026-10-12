@@ -8,8 +8,11 @@ import kotlinx.coroutines.launch
 
 /** Explicit actions complete immediately; only removal of the sheet waits for its exit. */
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun WhispSheet(onDismissRequest: () -> Unit,
-    content: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit) {
+@Composable
+internal fun WhispSheet(
+    onDismissRequest: () -> Unit,
+    content: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
+) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var closing by remember { mutableStateOf(false) }
@@ -20,11 +23,17 @@ import kotlinx.coroutines.launch
                 try {
                     sheet.hide()
                     if (!sheet.isVisible) onDismissRequest()
-                } finally { closing = false }
+                } finally {
+                    closing = false
+                }
             }
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismissRequest, sheetState = sheet, containerColor = Surface) {
+    ModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        sheetState = sheet,
+        containerColor = Surface,
+    ) {
         content(dismiss)
     }
 }

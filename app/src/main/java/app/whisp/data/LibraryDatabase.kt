@@ -13,7 +13,7 @@ data class SourceEntity(
     val username: String = "",
     val secret: String = "",
     val lastScan: Long = 0,
-    val error: String? = null
+    val error: String? = null,
 )
 
 @Entity(tableName = "works")
@@ -27,7 +27,7 @@ data class WorkEntity(
     val coverId: String? = null,
     val favorite: Boolean = false,
     val addedAt: Long = System.currentTimeMillis(),
-    val offlineAttachments: Boolean = false
+    val offlineAttachments: Boolean = false,
 )
 
 @Entity(tableName = "tracks", indices = [Index("workId")])
@@ -41,7 +41,7 @@ data class TrackEntity(
     val durationMs: Long = 0,
     val subtitleId: String? = null,
     val scriptId: String? = null,
-    val bonus: Boolean = false
+    val bonus: Boolean = false,
 )
 
 @Entity(tableName = "attachments", indices = [Index("workId")])
@@ -51,7 +51,7 @@ data class AttachmentEntity(
     val title: String,
     val fileName: String,
     val relativePath: String,
-    val kind: String
+    val kind: String,
 )
 
 @Entity(tableName = "locations", indices = [Index("assetId"), Index("sourceId")])
@@ -62,7 +62,7 @@ data class LocationEntity(
     val uri: String,
     val size: Long,
     val modified: Long = 0,
-    val generation: Long = 0
+    val generation: Long = 0,
 )
 
 @Entity(tableName = "progress")
@@ -70,7 +70,7 @@ data class ProgressEntity(
     @PrimaryKey val workId: String,
     val trackId: String,
     val positionMs: Long,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
 )
 
 @Entity(tableName = "bookmarks", indices = [Index("workId")])
@@ -80,51 +80,107 @@ data class BookmarkEntity(
     val trackId: String,
     val positionMs: Long,
     val title: String,
-    val endMs: Long? = null
+    val endMs: Long? = null,
 )
 
 data class WorkDetails(
     @Embedded val work: WorkEntity,
     @Relation(parentColumn = "id", entityColumn = "workId") val tracks: List<TrackEntity>,
-    @Relation(parentColumn = "id", entityColumn = "workId") val attachments: List<AttachmentEntity>
+    @Relation(parentColumn = "id", entityColumn = "workId") val attachments: List<AttachmentEntity>,
 )
 
 @Dao
 interface LibraryDao {
     @Query("SELECT * FROM sources ORDER BY name") fun observeSources(): Flow<List<SourceEntity>>
+
     @Query("SELECT * FROM sources") suspend fun sources(): List<SourceEntity>
+
     @Query("SELECT * FROM sources WHERE id = :id") suspend fun source(id: String): SourceEntity?
+
     @Upsert suspend fun putSource(source: SourceEntity)
+
     @Query("DELETE FROM sources WHERE id = :id") suspend fun deleteSource(id: String)
-    @Query("DELETE FROM locations WHERE sourceId = :id") suspend fun deleteSourceLocations(id: String)
-    @Transaction @Query("SELECT * FROM works WHERE offlineAttachments = 1 OR EXISTS (SELECT 1 FROM tracks JOIN locations ON locations.assetId = tracks.id WHERE tracks.workId = works.id) ORDER BY addedAt DESC")
+
+    @Query("DELETE FROM locations WHERE sourceId = :id")
+    suspend fun deleteSourceLocations(id: String)
+
+    @Transaction
+    @Query(
+        "SELECT * FROM works WHERE offlineAttachments = 1 OR EXISTS (SELECT 1 FROM tracks JOIN locations ON locations.assetId = tracks.id WHERE tracks.workId = works.id) ORDER BY addedAt DESC",
+    )
     fun observeLibrary(): Flow<List<WorkDetails>>
-    @Transaction @Query("SELECT * FROM works WHERE id = :id") suspend fun details(id: String): WorkDetails?
+
+    @Transaction
+    @Query("SELECT * FROM works WHERE id = :id")
+    suspend fun details(id: String): WorkDetails?
+
     @Query("SELECT * FROM works WHERE id = :id") suspend fun work(id: String): WorkEntity?
+
     @Query("SELECT * FROM works") suspend fun allWorks(): List<WorkEntity>
-    @Query("SELECT id FROM attachments WHERE kind = 'image'") suspend fun imageAttachments(): List<String>
+
+    @Query("SELECT id FROM attachments WHERE kind = 'image'")
+    suspend fun imageAttachments(): List<String>
+
     @Query("SELECT * FROM tracks") suspend fun allTracks(): List<TrackEntity>
+
     @Upsert suspend fun putWorks(works: List<WorkEntity>)
+
     @Upsert suspend fun putTracks(tracks: List<TrackEntity>)
+
     @Upsert suspend fun putAttachments(attachments: List<AttachmentEntity>)
+
     @Upsert suspend fun putLocations(locations: List<LocationEntity>)
+
     @Query("DELETE FROM locations WHERE sourceId = :id AND generation != :generation")
     suspend fun removeStaleLocations(id: String, generation: Long)
-    @Query("SELECT * FROM locations WHERE assetId = :id") suspend fun locations(id: String): List<LocationEntity>
+
+    @Query("SELECT * FROM locations WHERE assetId = :id")
+    suspend fun locations(id: String): List<LocationEntity>
+
     @Query("SELECT * FROM tracks WHERE id = :id") suspend fun track(id: String): TrackEntity?
-    @Query("UPDATE tracks SET durationMs = :duration WHERE id = :id AND durationMs != :duration") suspend fun updateDuration(id: String, duration: Long)
-    @Query("UPDATE works SET favorite = NOT favorite WHERE id = :id") suspend fun toggleFavorite(id: String)
-    @Query("UPDATE works SET offlineAttachments = :ready WHERE id = :id") suspend fun attachmentsReady(id: String, ready: Boolean)
-    @Query("SELECT * FROM progress ORDER BY updatedAt DESC") fun observeProgress(): Flow<List<ProgressEntity>>
-    @Query("SELECT * FROM progress WHERE workId = :id") suspend fun progress(id: String): ProgressEntity?
-    @Query("SELECT * FROM progress ORDER BY updatedAt DESC LIMIT 1") suspend fun latestProgress(): ProgressEntity?
+
+    @Query("UPDATE tracks SET durationMs = :duration WHERE id = :id AND durationMs != :duration")
+    suspend fun updateDuration(id: String, duration: Long)
+
+    @Query("UPDATE works SET favorite = NOT favorite WHERE id = :id")
+    suspend fun toggleFavorite(id: String)
+
+    @Query("UPDATE works SET offlineAttachments = :ready WHERE id = :id")
+    suspend fun attachmentsReady(id: String, ready: Boolean)
+
+    @Query("SELECT * FROM progress ORDER BY updatedAt DESC")
+    fun observeProgress(): Flow<List<ProgressEntity>>
+
+    @Query("SELECT * FROM progress WHERE workId = :id")
+    suspend fun progress(id: String): ProgressEntity?
+
+    @Query("SELECT * FROM progress ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun latestProgress(): ProgressEntity?
+
     @Upsert suspend fun saveProgress(progress: ProgressEntity)
-    @Query("SELECT * FROM bookmarks ORDER BY positionMs") fun observeBookmarks(): Flow<List<BookmarkEntity>>
+
+    @Query("SELECT * FROM bookmarks ORDER BY positionMs")
+    fun observeBookmarks(): Flow<List<BookmarkEntity>>
+
     @Upsert suspend fun saveBookmark(bookmark: BookmarkEntity)
+
     @Query("DELETE FROM bookmarks WHERE id = :id") suspend fun deleteBookmark(id: String)
 }
 
-@Database(entities = [SourceEntity::class, WorkEntity::class, TrackEntity::class,
-    AttachmentEntity::class, LocationEntity::class, ProgressEntity::class, BookmarkEntity::class],
-    version = 1, exportSchema = true)
-abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao }
+@Database(
+    entities =
+        [
+            SourceEntity::class,
+            WorkEntity::class,
+            TrackEntity::class,
+            AttachmentEntity::class,
+            LocationEntity::class,
+            ProgressEntity::class,
+            BookmarkEntity::class,
+        ],
+    version = 1,
+    exportSchema = true,
+)
+abstract class LibraryDatabase : RoomDatabase() {
+    abstract fun library(): LibraryDao
+}

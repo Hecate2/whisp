@@ -18,11 +18,15 @@ import org.junit.runner.RunWith
 class LocalImportIntegrationTest {
     @get:Rule val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
     @get:Rule val ui = createAndroidComposeRule<MainActivity>()
-    @Test fun importsThroughSystemDirectoryPickerAndPersistsReadGrant() {
+
+    @Test
+    fun importsThroughSystemDirectoryPickerAndPersistsReadGrant() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)
         device.executeShellCommand("mkdir -p /sdcard/Download/WhispFixture")
-        device.executeShellCommand("cp -r /data/local/tmp/whisp-fixture/. /sdcard/Download/WhispFixture/")
+        device.executeShellCommand(
+            "cp -r /data/local/tmp/whisp-fixture/. /sdcard/Download/WhispFixture/",
+        )
         ui.onNodeWithText("来源", useUnmergedTree = true).performClick()
         ui.onNodeWithContentDescription("添加来源").performClick()
         ui.onNodeWithText("本地目录").performClick()
@@ -37,16 +41,27 @@ class LocalImportIntegrationTest {
         device.wait(Until.findObject(By.text("ALLOW")), 10000)?.click()
             ?: error("Directory confirmation not shown")
         val repo = (ui.activity.application as WhispApp).repository
-        ui.waitUntil(30000) { repo.sources.value.any { it.kind == "local" && it.lastScan > 0 } && repo.busy.value.isEmpty() }
+        ui.waitUntil(30000) {
+            repo.sources.value.any { it.kind == "local" && it.lastScan > 0 } &&
+                repo.busy.value.isEmpty()
+        }
         val source = repo.sources.value.first { it.kind == "local" }
         assertNull(source.error)
-        assertTrue(repo.context.contentResolver.persistedUriPermissions.any { it.uri.toString() == source.root && it.isReadPermission })
+        assertTrue(
+            repo.context.contentResolver.persistedUriPermissions.any {
+                it.uri.toString() == source.root && it.isReadPermission
+            },
+        )
         runBlocking {
             val work = repo.library.value.first { it.work.rj == "RJ00000001" }
-            val local = repo.dao.locations(work.tracks.single().id).first { it.sourceId == source.id }
-            val bytes = repo.context.contentResolver.openInputStream(android.net.Uri.parse(local.uri))!!.use { stream ->
-                ByteArray(10).also { assertTrue(stream.read(it) > 0) }
-            }
+            val local =
+                repo.dao.locations(work.tracks.single().id).first { it.sourceId == source.id }
+            val bytes =
+                repo.context.contentResolver
+                    .openInputStream(android.net.Uri.parse(local.uri))!!
+                    .use { stream ->
+                        ByteArray(10).also { assertTrue(stream.read(it) > 0) }
+                    }
             assertEquals(10, bytes.size)
             assertEquals(1, repo.library.value.count { it.work.rj == "RJ00000001" })
         }

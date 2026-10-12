@@ -4,134 +4,242 @@ package app.whisp.data
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import java.io.ByteArrayInputStream
+import java.io.IOException
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.MediaType.Companion.toMediaType
-import java.io.ByteArrayInputStream
-import java.io.IOException
-import java.net.URI
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import javax.xml.parsers.DocumentBuilderFactory
-import kotlin.coroutines.coroutineContext
 
 class LocalDirectory(private val context: Context) {
-    suspend fun walk(root: String): List<FileEntry> = withContext(Dispatchers.IO) {
-        val tree = Uri.parse(root)
-        val rootId = DocumentsContract.getTreeDocumentId(tree)
-        val files = mutableListOf<FileEntry>()
-        val pending = ArrayDeque<Pair<String, String>>()
-        pending.add(rootId to "")
-        val seen = mutableSetOf<String>()
-        while (pending.isNotEmpty()) {
-            coroutineContext.ensureActive()
-            val (id, prefix) = pending.removeFirst()
-            check(seen.size < 100_000) { "目录过大" }
-            if (!seen.add(id)) continue
-            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
-            val projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE,
-                DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            val cursor = context.contentResolver.query(children, projection, null, null, null)
-                ?: throw IOException("无法读取目录")
-            cursor.use {
-                while (it.moveToNext()) {
-                    val docId = it.getString(0)
-                    val name = it.getString(1)
-                    val path = if (prefix.isBlank()) name else "$prefix/$name"
-                    val directory = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
-                    files += FileEntry(path, DocumentsContract.buildDocumentUriUsingTree(tree, docId).toString(),
-                        directory, if (it.isNull(3)) 0 else it.getLong(3), if (it.isNull(4)) 0 else it.getLong(4))
-                    if (directory) pending.add(docId to path)
+    suspend fun walk(root: String): List<FileEntry> =
+        withContext(Dispatchers.IO) {
+            val tree = Uri.parse(root)
+            val rootId = DocumentsContract.getTreeDocumentId(tree)
+            val files = mutableListOf<FileEntry>()
+            val pending = ArrayDeque<Pair<String, String>>()
+            pending.add(rootId to "")
+            val seen = mutableSetOf<String>()
+            while (pending.isNotEmpty()) {
+                coroutineContext.ensureActive()
+                val (id, prefix) = pending.removeFirst()
+                check(seen.size < 100_000) { "目录过大" }
+                if (!seen.add(id)) continue
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
+                val projection =
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    )
+                val cursor =
+                    context.contentResolver.query(children, projection, null, null, null)
+                        ?: throw IOException("无法读取目录")
+                cursor.use {
+                    while (it.moveToNext()) {
+                        val docId = it.getString(0)
+                        val name = it.getString(1)
+                        val path = if (prefix.isBlank()) name else "$prefix/$name"
+                        val directory = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
+                        files +=
+                            FileEntry(
+                                path,
+                                DocumentsContract.buildDocumentUriUsingTree(tree, docId).toString(),
+                                directory,
+                                if (it.isNull(3)) 0 else it.getLong(3),
+                                if (it.isNull(4)) 0 else it.getLong(4),
+                            )
+                        if (directory) pending.add(docId to path)
+                    }
                 }
             }
+            files
         }
-        files
-    }
 }
 
-data class DavEntry(val url: HttpUrl, val name: String, val directory: Boolean, val size: Long, val modified: Long)
+data class DavEntry(
+    val url: HttpUrl,
+    val name: String,
+    val directory: Boolean,
+    val size: Long,
+    val modified: Long,
+)
 
 class WebDavClient(private val http: OkHttpClient) {
     companion object {
-        fun sameOrigin(a: HttpUrl, b: HttpUrl) = a.scheme == b.scheme && a.host == b.host && a.port == b.port
-        fun insideRoot(url: HttpUrl, root: HttpUrl) = sameOrigin(url, root) &&
-            (url.encodedPath == root.encodedPath.trimEnd('/') || url.encodedPath.startsWith(root.encodedPath))
+        fun sameOrigin(a: HttpUrl, b: HttpUrl) =
+            a.scheme == b.scheme && a.host == b.host && a.port == b.port
+
+        fun insideRoot(url: HttpUrl, root: HttpUrl) =
+            sameOrigin(url, root) &&
+                (url.encodedPath == root.encodedPath.trimEnd('/') ||
+                    url.encodedPath.startsWith(root.encodedPath))
+
         fun parse(bytes: ByteArray, requested: HttpUrl): List<DavEntry> {
-            require(!bytes.toString(Charsets.UTF_8).replace("\u0000", "").contains("<!DOCTYPE", ignoreCase = true)) { "不支持 DTD" }
-            val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true; isExpandEntityReferences = false }
-            runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
-            runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            require(
+                !bytes
+                    .toString(Charsets.UTF_8)
+                    .replace("\u0000", "")
+                    .contains("<!DOCTYPE", ignoreCase = true),
+            ) {
+                "不支持 DTD"
+            }
+            val factory =
+                DocumentBuilderFactory.newInstance().apply {
+                    isNamespaceAware = true
+                    isExpandEntityReferences = false
+                }
+            runCatching {
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+            }
+            runCatching {
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            }
             val document = factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
             val responses = document.getElementsByTagNameNS("DAV:", "response")
             return (0 until responses.length).mapNotNull { index ->
                 val element = responses.item(index) as org.w3c.dom.Element
-                val url = requested.resolve(element.getElementsByTagNameNS("DAV:", "href").item(0)?.textContent?.trim()
-                    ?: return@mapNotNull null) ?: return@mapNotNull null
+                val url =
+                    requested.resolve(
+                        element.getElementsByTagNameNS("DAV:", "href").item(0)?.textContent?.trim()
+                            ?: return@mapNotNull null,
+                    ) ?: return@mapNotNull null
                 if (!sameOrigin(url, requested)) return@mapNotNull null
                 val propstats = element.getElementsByTagNameNS("DAV:", "propstat")
-                val validProps = (0 until propstats.length).map { propstats.item(it) as org.w3c.dom.Element }.filter {
-                    val status = it.getElementsByTagNameNS("DAV:", "status").item(0)?.textContent.orEmpty()
-                    Regex("\\s2\\d\\d\\s").containsMatchIn("$status ")
-                }
+                val validProps =
+                    (0 until propstats.length)
+                        .map { propstats.item(it) as org.w3c.dom.Element }
+                        .filter {
+                            val status =
+                                it.getElementsByTagNameNS("DAV:", "status")
+                                    .item(0)
+                                    ?.textContent
+                                    .orEmpty()
+                            Regex("\\s2\\d\\d\\s").containsMatchIn("$status ")
+                        }
                 if (validProps.isEmpty()) return@mapNotNull null
                 fun field(name: String) = validProps.firstNotNullOfOrNull {
                     it.getElementsByTagNameNS("DAV:", name).item(0)?.textContent?.trim()
                 }
-                DavEntry(url, field("displayname") ?: url.pathSegments.lastOrNull { it.isNotEmpty() }.orEmpty(),
+                DavEntry(
+                    url,
+                    field("displayname")
+                        ?: url.pathSegments.lastOrNull { it.isNotEmpty() }.orEmpty(),
                     validProps.any { it.getElementsByTagNameNS("DAV:", "collection").length > 0 },
                     field("getcontentlength")?.toLongOrNull() ?: 0,
-                    runCatching { ZonedDateTime.parse(field("getlastmodified"), DateTimeFormatter.RFC_1123_DATE_TIME)
-                        .toInstant().toEpochMilli() }.getOrDefault(0))
+                    runCatching {
+                            ZonedDateTime.parse(
+                                    field("getlastmodified"),
+                                    DateTimeFormatter.RFC_1123_DATE_TIME,
+                                )
+                                .toInstant()
+                                .toEpochMilli()
+                        }
+                        .getOrDefault(0),
+                )
             }
         }
     }
-    private fun authorize(builder: Request.Builder, source: SourceEntity, password: String): Request.Builder {
-        if (source.username.isNotEmpty()) builder.header("Authorization", Credentials.basic(source.username, password, Charsets.UTF_8))
+
+    private fun authorize(
+        builder: Request.Builder,
+        source: SourceEntity,
+        password: String,
+    ): Request.Builder {
+        if (source.username.isNotEmpty())
+            builder.header(
+                "Authorization",
+                Credentials.basic(source.username, password, Charsets.UTF_8),
+            )
         return builder
     }
+
     fun list(url: HttpUrl, source: SourceEntity, password: String): List<DavEntry> {
-        val body = """<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
-        val request = authorize(Request.Builder().url(url).header("Depth", "1")
-            .method("PROPFIND", body.toRequestBody("application/xml; charset=utf-8".toMediaType())), source, password).build()
+        val body =
+            """<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
+        val request =
+            authorize(
+                    Request.Builder()
+                        .url(url)
+                        .header("Depth", "1")
+                        .method(
+                            "PROPFIND",
+                            body.toRequestBody("application/xml; charset=utf-8".toMediaType()),
+                        ),
+                    source,
+                    password,
+                )
+                .build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("目录访问失败（${response.code}）")
-            val bytes = response.body?.byteStream()?.use { boundedRead(it, 8 * 1024 * 1024) } ?: throw IOException("空响应")
+            val bytes =
+                response.body?.byteStream()?.use { boundedRead(it, 8 * 1024 * 1024) }
+                    ?: throw IOException("空响应")
             return parse(bytes, url)
         }
     }
-    suspend fun walk(source: SourceEntity, password: String): List<FileEntry> = withContext(Dispatchers.IO) {
-        val root = (source.root.trimEnd('/') + "/").toHttpUrl()
-        val pending = ArrayDeque<HttpUrl>().apply { add(root) }
-        val seen = mutableSetOf<String>()
-        val files = mutableListOf<FileEntry>()
-        while (pending.isNotEmpty()) {
-            coroutineContext.ensureActive()
-            check(seen.size < 10_000 && files.size < 100_000) { "目录过大" }
-            val directory = pending.removeFirst()
-            if (!seen.add(directory.toString().trimEnd('/'))) continue
-            list(directory, source, password).forEach { entry ->
-                if (!insideRoot(entry.url, root)) return@forEach
-                if (entry.url.encodedPath.trimEnd('/') == directory.encodedPath.trimEnd('/')) return@forEach
-                val relativeSegments = entry.url.pathSegments.drop(root.pathSegments.dropLastWhile { it.isEmpty() }.size)
-                val path = relativeSegments.filter { it.isNotEmpty() }.joinToString("/")
-                if (path.isBlank() || path.split('/').any { it == ".." }) return@forEach
-                files += FileEntry(path, entry.url.toString(), entry.directory, entry.size, entry.modified)
-                if (entry.directory) pending.add(entry.url.newBuilder().apply {
-                    if (!entry.url.encodedPath.endsWith('/')) addPathSegment("")
-                }.build())
+
+    suspend fun walk(source: SourceEntity, password: String): List<FileEntry> =
+        withContext(Dispatchers.IO) {
+            val root = (source.root.trimEnd('/') + "/").toHttpUrl()
+            val pending = ArrayDeque<HttpUrl>().apply { add(root) }
+            val seen = mutableSetOf<String>()
+            val files = mutableListOf<FileEntry>()
+            while (pending.isNotEmpty()) {
+                coroutineContext.ensureActive()
+                check(seen.size < 10_000 && files.size < 100_000) { "目录过大" }
+                val directory = pending.removeFirst()
+                if (!seen.add(directory.toString().trimEnd('/'))) continue
+                list(directory, source, password).forEach { entry ->
+                    if (!insideRoot(entry.url, root)) return@forEach
+                    if (entry.url.encodedPath.trimEnd('/') == directory.encodedPath.trimEnd('/'))
+                        return@forEach
+                    val relativeSegments =
+                        entry.url.pathSegments.drop(
+                            root.pathSegments.dropLastWhile { it.isEmpty() }.size,
+                        )
+                    val path = relativeSegments.filter { it.isNotEmpty() }.joinToString("/")
+                    if (path.isBlank() || path.split('/').any { it == ".." }) return@forEach
+                    files +=
+                        FileEntry(
+                            path,
+                            entry.url.toString(),
+                            entry.directory,
+                            entry.size,
+                            entry.modified,
+                        )
+                    if (entry.directory)
+                        pending.add(
+                            entry.url
+                                .newBuilder()
+                                .apply {
+                                    if (!entry.url.encodedPath.endsWith('/')) addPathSegment("")
+                                }
+                                .build(),
+                        )
+                }
             }
+            files.distinctBy { it.uri }
         }
-        files.distinctBy { it.uri }
-    }
-    fun bytes(url: String, source: SourceEntity, password: String, limit: Int = 8 * 1024 * 1024): ByteArray {
+
+    fun bytes(
+        url: String,
+        source: SourceEntity,
+        password: String,
+        limit: Int = 8 * 1024 * 1024,
+    ): ByteArray {
         val root = (source.root.trimEnd('/') + "/").toHttpUrl()
         require(insideRoot(url.toHttpUrl(), root)) { "文件地址不属于此来源" }
         val request = authorize(Request.Builder().url(url), source, password).build()
@@ -141,13 +249,31 @@ class WebDavClient(private val http: OkHttpClient) {
             return boundedRead(stream, limit)
         }
     }
-    fun range(url: String, source: SourceEntity, password: String, offset: Long, length: Int): ByteArray {
+
+    fun range(
+        url: String,
+        source: SourceEntity,
+        password: String,
+        offset: Long,
+        length: Int,
+    ): ByteArray {
         val root = (source.root.trimEnd('/') + "/").toHttpUrl()
         require(insideRoot(url.toHttpUrl(), root))
-        val request = authorize(Request.Builder().url(url).header("Range", "bytes=$offset-${offset + length - 1}"), source, password).build()
+        val request =
+            authorize(
+                    Request.Builder()
+                        .url(url)
+                        .header("Range", "bytes=$offset-${offset + length - 1}"),
+                    source,
+                    password,
+                )
+                .build()
         http.newCall(request).execute().use { response ->
             require(response.code == 206 || response.code == 200 && offset == 0L) { "服务器不支持分段读取" }
-            if (response.code == 206) require(response.header("Content-Range")?.startsWith("bytes $offset-") == true) { "分段响应不正确" }
+            if (response.code == 206)
+                require(response.header("Content-Range")?.startsWith("bytes $offset-") == true) {
+                    "分段响应不正确"
+                }
             val stream = response.body?.byteStream() ?: error("空文件")
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(minOf(8192, length))

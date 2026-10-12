@@ -6,8 +6,12 @@ data class QueuePosition(val index: Int, val positionMs: Long)
 object PlaybackQueue {
     fun finished(tracks: List<TrackEntity>, progress: ProgressEntity?): Boolean {
         val last = tracks.lastOrNull() ?: return false
-        return progress?.trackId == last.id && last.durationMs > 0 && progress.positionMs > 0 && progress.positionMs >= last.durationMs - 500
+        return progress?.trackId == last.id &&
+            last.durationMs > 0 &&
+            progress.positionMs > 0 &&
+            progress.positionMs >= last.durationMs - 500
     }
+
     fun resume(tracks: List<TrackEntity>, progress: ProgressEntity?): QueuePosition {
         val index = tracks.indexOfFirst { it.id == progress?.trackId }
         if (index < 0) return QueuePosition(0, 0)

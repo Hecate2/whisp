@@ -19,16 +19,24 @@ internal val LocalTouchFeedback = staticCompositionLocalOf { true }
 /** Feedback only accompanies explicit actions, never playback or subtitle following. */
 internal class WhispHaptics(private val view: View, private val enabled: Boolean) {
     fun confirm() {
-        if (enabled) view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30)
-            HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK)
+        if (enabled)
+            view.performHapticFeedback(
+                if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM
+                else HapticFeedbackConstants.CONTEXT_CLICK,
+            )
     }
+
     fun tick() {
-        if (enabled) view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 34)
-            HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK)
+        if (enabled)
+            view.performHapticFeedback(
+                if (Build.VERSION.SDK_INT >= 34) HapticFeedbackConstants.SEGMENT_TICK
+                else HapticFeedbackConstants.CLOCK_TICK,
+            )
     }
 }
 
-@Composable internal fun rememberWhispHaptics(): WhispHaptics {
+@Composable
+internal fun rememberWhispHaptics(): WhispHaptics {
     val view = LocalView.current
     val enabled = LocalTouchFeedback.current
     return remember(view, enabled) { WhispHaptics(view, enabled) }
@@ -36,9 +44,17 @@ internal class WhispHaptics(private val view: View, private val enabled: Boolean
 
 internal fun openAudioOutput(context: Context) {
     try {
-        if (Build.VERSION.SDK_INT >= 34 && MediaRouter2.getInstance(context).showSystemOutputSwitcher()) return
-        context.startActivity(Intent(if (Build.VERSION.SDK_INT >= 29)
-            Settings.Panel.ACTION_VOLUME else Settings.ACTION_SOUND_SETTINGS))
+        if (
+            Build.VERSION.SDK_INT >= 34 &&
+                MediaRouter2.getInstance(context).showSystemOutputSwitcher()
+        )
+            return
+        context.startActivity(
+            Intent(
+                if (Build.VERSION.SDK_INT >= 29) Settings.Panel.ACTION_VOLUME
+                else Settings.ACTION_SOUND_SETTINGS,
+            ),
+        )
     } catch (_: android.content.ActivityNotFoundException) {
         Toast.makeText(context, "无法打开系统音频面板", Toast.LENGTH_SHORT).show()
     } catch (_: SecurityException) {

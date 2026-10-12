@@ -5,7 +5,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PrecisionScrubberTest {
-    @Test fun switchingScaleDoesNotJumpAndFineMovementIsMuchSmaller() {
+    @Test
+    fun switchingScaleDoesNotJumpAndFineMovementIsMuchSmaller() {
         val drag = PrecisionScrubber(3_600_000, 300f, 150f, 30f, 36f)
         assertEquals(1_800_000, drag.move(150f, 80f))
         assertTrue(drag.fine)
@@ -14,7 +15,9 @@ class PrecisionScrubberTest {
         assertFalse(drag.fine)
         assertEquals(1_922_000, drag.move(170f, 30f))
     }
-    @Test fun fineWindowAndSeekingAreClampedAtBothEnds() {
+
+    @Test
+    fun fineWindowAndSeekingAreClampedAtBothEnds() {
         val nearStart = PrecisionScrubber(3_600_000, 300f, 0f, 30f, 36f)
         nearStart.move(0f, 80f)
         assertEquals(0, nearStart.rangeStart)
@@ -24,7 +27,9 @@ class PrecisionScrubberTest {
         assertEquals(3_600_000, nearEnd.rangeEnd)
         assertEquals(3_600_000, nearEnd.move(320f, 80f))
     }
-    @Test fun shortAudioDoesNotProduceAnInvalidRange() {
+
+    @Test
+    fun shortAudioDoesNotProduceAnInvalidRange() {
         val drag = PrecisionScrubber(10_000, 300f, 150f, 30f, 36f)
         drag.move(150f, 80f)
         assertEquals(0, drag.rangeStart)

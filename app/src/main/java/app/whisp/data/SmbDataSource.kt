@@ -15,31 +15,50 @@ class SmbDataSource(private val readerFor: (String) -> SmbClient.Reader) : BaseD
     private var position = 0L
     private var remaining = 0L
     private var started = false
+
     override fun open(dataSpec: DataSpec): Long {
         transferInitializing(dataSpec)
         try {
             reader = readerFor(dataSpec.uri.toString())
             if (dataSpec.position > reader!!.length) throw IOException("播放位置超出文件长度")
-            spec = dataSpec; position = dataSpec.position
+            spec = dataSpec
+            position = dataSpec.position
             remaining = reader!!.length - position
-            if (dataSpec.length != C.LENGTH_UNSET.toLong()) remaining = minOf(remaining, dataSpec.length)
-            started = true; transferStarted(dataSpec)
+            if (dataSpec.length != C.LENGTH_UNSET.toLong())
+                remaining = minOf(remaining, dataSpec.length)
+            started = true
+            transferStarted(dataSpec)
             return remaining
-        } catch (e: Exception) { close(); throw if (e is IOException) e else IOException(e) }
+        } catch (e: Exception) {
+            close()
+            throw if (e is IOException) e else IOException(e)
+        }
     }
+
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
-        val count = reader!!.read(buffer, position, offset, minOf(length.toLong(), remaining).toInt())
+        val count =
+            reader!!.read(buffer, position, offset, minOf(length.toLong(), remaining).toInt())
         if (count <= 0) throw IOException("SMB 文件读取中断")
-        position += count; remaining -= count; bytesTransferred(count)
+        position += count
+        remaining -= count
+        bytesTransferred(count)
         return count
     }
+
     override fun getUri(): Uri? = spec?.uri
+
     override fun close() {
-        try { reader?.close() } finally {
-            reader = null; spec = null
-            if (started) { started = false; transferEnded() }
+        try {
+            reader?.close()
+        } finally {
+            reader = null
+            spec = null
+            if (started) {
+                started = false
+                transferEnded()
+            }
         }
     }
 }

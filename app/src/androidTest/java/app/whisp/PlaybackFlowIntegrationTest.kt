@@ -2,11 +2,10 @@
 package app.whisp
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Intent
-import android.app.NotificationManager
 import android.graphics.Bitmap
-import java.io.File
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -19,63 +18,102 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import app.whisp.playback.PlaybackService
 import app.whisp.ui.AppViewModel
+import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackFlowIntegrationTest {
     @get:Rule val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
     @get:Rule val ui = createAndroidComposeRule<MainActivity>()
-    private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private val repo get() = (ui.activity.application as WhispApp).repository
+    private val instrumentation
+        get() = InstrumentationRegistry.getInstrumentation()
+
+    private val repo
+        get() = (ui.activity.application as WhispApp).repository
+
     private var diagnostics: () -> String = { "controller not ready" }
+
     private fun waitFor(timeout: Long = 30000, condition: () -> Boolean) {
         val end = System.currentTimeMillis() + timeout
-        while (System.currentTimeMillis() < end) { if (condition()) return; Thread.sleep(100) }
+        while (System.currentTimeMillis() < end) {
+            if (condition()) return
+            Thread.sleep(100)
+        }
         fail("Condition timed out: " + diagnostics())
     }
-    @Test fun backgroundScanPersistentSubtitlesAndPlaybackControls() {
+
+    @Test
+    fun backgroundScanPersistentSubtitlesAndPlaybackControls() {
         assertTrue(repo.context.packageName.endsWith(".smoketest"))
         val args = InstrumentationRegistry.getArguments()
-        val source = runBlocking { repo.addSmb("Flow", requireNotNull(args.getString("smbRoot")),
-            requireNotNull(args.getString("smbUser")), requireNotNull(args.getString("smbPassword"))) }
+        val source = runBlocking {
+            repo.addSmb(
+                "Flow",
+                requireNotNull(args.getString("smbRoot")),
+                requireNotNull(args.getString("smbUser")),
+                requireNotNull(args.getString("smbPassword")),
+            )
+        }
         waitFor { source in repo.busy.value }
-        waitFor { repo.context.getSystemService(NotificationManager::class.java).activeNotifications.any { it.notification.channelId == "library-scan" } }
+        waitFor {
+            repo.context.getSystemService(NotificationManager::class.java).activeNotifications.any {
+                it.notification.channelId == "library-scan"
+            }
+        }
         instrumentation.runOnMainSync { ui.activity.moveTaskToBack(true) }
-        waitFor(60000) { runBlocking { repo.dao.source(source)!!.lastScan > 0 } && source !in repo.busy.value }
+        waitFor(60000) {
+            runBlocking { repo.dao.source(source)!!.lastScan > 0 } && source !in repo.busy.value
+        }
         val detail = runBlocking { repo.dao.allWorks().single().let { repo.dao.details(it.id)!! } }
         assertEquals(2, detail.tracks.size)
         assertTrue(detail.tracks.all { it.durationMs in 1_850_000..1_854_000 })
         val tracks = detail.tracks.sortedBy { it.order }
-        val future = MediaController.Builder(repo.context, SessionToken(repo.context,
-            ComponentName(repo.context, PlaybackService::class.java))).buildAsync()
+        val future =
+            MediaController.Builder(
+                    repo.context,
+                    SessionToken(
+                        repo.context,
+                        ComponentName(repo.context, PlaybackService::class.java),
+                    ),
+                )
+                .buildAsync()
         val c = future.get(20, TimeUnit.SECONDS)
         lateinit var model: AppViewModel
         instrumentation.runOnMainSync {
             assertTrue(c.isCommandAvailable(Player.COMMAND_SET_VOLUME))
             c.volume = 0f
             model = ViewModelProvider(ui.activity)[AppViewModel::class.java]
-            ui.activity.startActivity(Intent(ui.activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            ui.activity.startActivity(
+                Intent(ui.activity, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+            )
         }
         diagnostics = {
             var description = ""
             instrumentation.runOnMainSync {
-                description = "model=${model.player.value}; state=${c.playbackState}; suppression=${c.playbackSuppressionReason}; play=${c.playWhenReady}; position=${c.currentPosition}; error=${c.playerError?.errorCodeName}"
+                description =
+                    "model=${model.player.value}; state=${c.playbackState}; suppression=${c.playbackSuppressionReason}; play=${c.playWhenReady}; position=${c.currentPosition}; error=${c.playerError?.errorCodeName}"
             }
             description
         }
         try {
             ui.onNodeWithContentDescription("测试作品").performClick()
             ui.onNodeWithText("播放作品").performClick()
-            waitFor { model.player.value.playWhenReady && model.player.value.trackId == tracks[0].id }
+            waitFor {
+                model.player.value.playWhenReady && model.player.value.trackId == tracks[0].id
+            }
             waitFor { model.position.value > 0 }
             val beforeClear = model.position.value
-            runBlocking { repo.clearTemporaryCache(); repo.setSettings(streamingCacheMiB = 64) }
+            runBlocking {
+                repo.clearTemporaryCache()
+                repo.setSettings(streamingCacheMiB = 64)
+            }
             waitFor { model.position.value > beforeClear + 500 }
             assertEquals(tracks[0].id, model.player.value.trackId)
             assertTrue(model.player.value.playWhenReady)
@@ -95,8 +133,11 @@ class PlaybackFlowIntegrationTest {
             instrumentation.runOnMainSync { model.seek(6000) }
             waitFor { model.position.value == 6000L }
             ui.onNodeWithContentDescription("跟随字幕").assertIsDisplayed()
-            assertEquals("Seeking during manual reading must not scroll the script", readingBounds,
-                ui.onNodeWithTag("subtitle-1").fetchSemanticsNode().boundsInRoot)
+            assertEquals(
+                "Seeking during manual reading must not scroll the script",
+                readingBounds,
+                ui.onNodeWithTag("subtitle-1").fetchSemanticsNode().boundsInRoot,
+            )
             instrumentation.runOnMainSync { model.seek(4000) }
             waitFor { model.position.value == 4000L }
             ui.onNodeWithContentDescription("跟随字幕").performClick()
@@ -112,17 +153,29 @@ class PlaybackFlowIntegrationTest {
             ui.onNodeWithContentDescription("播放队列").performClick()
             ui.onNodeWithText("播放队列").assertExists()
             ui.onNodeWithText("02").performClick()
-            waitFor { model.player.value.trackId == tracks[1].id && model.player.value.playWhenReady }
+            waitFor {
+                model.player.value.trackId == tracks[1].id && model.player.value.playWhenReady
+            }
             waitFor { model.cues.value.firstOrNull()?.text == "Track 2 first" }
             ui.onNodeWithTag("subtitle-pane").assertIsDisplayed()
             assertEquals(pane, ui.onNodeWithTag("subtitle-pane").fetchSemanticsNode().boundsInRoot)
             ui.onNodeWithContentDescription("暂停").performClick()
-            instrumentation.runOnMainSync { model.seek(6000); model.playWork(detail, tracks[1].id) }
+            instrumentation.runOnMainSync {
+                model.seek(6000)
+                model.playWork(detail, tracks[1].id)
+            }
             waitFor { model.player.value.playWhenReady && model.position.value >= 6000 }
-            assertTrue("Selecting the current track must preserve its position", model.position.value < 10000)
+            assertTrue(
+                "Selecting the current track must preserve its position",
+                model.position.value < 10000,
+            )
             ui.onNodeWithText("Track 2 second").assertIsDisplayed()
-            assertEquals("Changing the active cue must not change the subtitle font or line height", lineHeight,
-                ui.onNodeWithTag("subtitle-1").fetchSemanticsNode().boundsInRoot.height, .5f)
+            assertEquals(
+                "Changing the active cue must not change the subtitle font or line height",
+                lineHeight,
+                ui.onNodeWithTag("subtitle-1").fetchSemanticsNode().boundsInRoot.height,
+                .5f,
+            )
             ui.onNodeWithContentDescription("暂停").performClick()
             instrumentation.runOnMainSync { model.seek(1000) }
             ui.onNodeWithContentDescription("片段").performClick()
@@ -140,9 +193,16 @@ class PlaybackFlowIntegrationTest {
             ui.onNodeWithText("完成").performClick()
             runBlocking { repo.setSettings(size = 24, hide = true) }
             waitFor { repo.settings.value.subtitleSize == 24 && repo.settings.value.hideArtwork }
-            assertTrue("Other preferences must retain reduced motion", repo.settings.value.reduceMotion)
+            assertTrue(
+                "Other preferences must retain reduced motion",
+                repo.settings.value.reduceMotion,
+            )
             Thread.sleep(600)
-            assertEquals("Preferences must retain an active loop", 1000L, model.player.value.loopStart)
+            assertEquals(
+                "Preferences must retain an active loop",
+                1000L,
+                model.player.value.loopStart,
+            )
             // Relative notification/headset seeks inside the range must retain the loop.
             instrumentation.runOnMainSync { model.loop(1000, 30000) }
             waitFor { model.player.value.loopEnd == 30000L }
@@ -162,43 +222,73 @@ class PlaybackFlowIntegrationTest {
             waitFor { model.position.value == 41000L }
             assertFalse("Precise seeking must retain a pause", model.player.value.playWhenReady)
             ui.onNodeWithTag("seek-bar").performTouchInput {
-                down(center); moveBy(androidx.compose.ui.geometry.Offset(20f, 0f));
-                moveBy(androidx.compose.ui.geometry.Offset(0f, -160f));
-                moveBy(androidx.compose.ui.geometry.Offset(15f, 0f)); up()
+                down(center)
+                moveBy(androidx.compose.ui.geometry.Offset(20f, 0f))
+                moveBy(androidx.compose.ui.geometry.Offset(0f, -160f))
+                moveBy(androidx.compose.ui.geometry.Offset(15f, 0f))
+                up()
             }
             assertFalse(model.player.value.playWhenReady)
             // A completed queue stops. Both external controls and the app restart its first item.
-            instrumentation.runOnMainSync { c.seekTo(1, tracks[1].durationMs - 200); c.play() }
+            instrumentation.runOnMainSync {
+                c.seekTo(1, tracks[1].durationMs - 200)
+                c.play()
+            }
             waitFor { model.player.value.ended }
             assertFalse(model.player.value.playWhenReady)
             instrumentation.runOnMainSync { c.play() }
-            waitFor { model.player.value.trackId == tracks[0].id && model.player.value.playWhenReady }
-            instrumentation.runOnMainSync { c.seekTo(1, tracks[1].durationMs - 200); c.play() }
+            waitFor {
+                model.player.value.trackId == tracks[0].id && model.player.value.playWhenReady
+            }
+            instrumentation.runOnMainSync {
+                c.seekTo(1, tracks[1].durationMs - 200)
+                c.play()
+            }
             waitFor { model.player.value.ended }
             ui.onNodeWithContentDescription("重新播放作品").performClick()
-            waitFor { model.player.value.trackId == tracks[0].id && model.player.value.playWhenReady }
+            waitFor {
+                model.player.value.trackId == tracks[0].id && model.player.value.playWhenReady
+            }
             ui.onNodeWithContentDescription("暂停").performClick()
             waitFor { !model.player.value.playWhenReady }
             instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-                File(repo.context.getExternalFilesDir(null), "ux-player.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                File(repo.context.getExternalFilesDir(null), "ux-player.png").outputStream().use {
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
                 bitmap.recycle()
             }
             instrumentation.runOnMainSync { ui.activity.moveTaskToBack(true) }
             Thread.sleep(1200)
             assertFalse(model.player.value.playWhenReady)
-            instrumentation.runOnMainSync { ui.activity.startActivity(Intent(ui.activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)) }
+            instrumentation.runOnMainSync {
+                ui.activity.startActivity(
+                    Intent(ui.activity, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+                )
+            }
             ui.onNodeWithTag("subtitle-pane").assertIsDisplayed()
-            instrumentation.runOnMainSync { model.playWork(detail, tracks[1].id, startPosition = 5000); model.togglePlay() }
-            waitFor { model.openingTrackId.value == null && model.player.value.trackId == tracks[1].id }
+            instrumentation.runOnMainSync {
+                model.playWork(detail, tracks[1].id, startPosition = 5000)
+                model.togglePlay()
+            }
+            waitFor {
+                model.openingTrackId.value == null && model.player.value.trackId == tracks[1].id
+            }
             Thread.sleep(1500)
-            assertFalse("Pausing while opening must retain the target and stay paused after buffering", model.player.value.playWhenReady)
+            assertFalse(
+                "Pausing while opening must retain the target and stay paused after buffering",
+                model.player.value.playWhenReady,
+            )
             assertTrue(model.position.value >= 5000)
             waitFor { repo.progress.value.firstOrNull()?.trackId == tracks[1].id }
             instrumentation.runOnMainSync { c.clearMediaItems() }
             waitFor { model.player.value.trackId == null }
             ui.onNodeWithTag("subtitle-pane").assertIsDisplayed()
             ui.onNodeWithText("Track 2 second").assertIsDisplayed()
-            assertFalse("Opening the remembered player must not autoplay", model.player.value.playWhenReady)
+            assertFalse(
+                "Opening the remembered player must not autoplay",
+                model.player.value.playWhenReady,
+            )
             // Return through the same cover without changing playback or the remembered cue.
             ui.onNodeWithContentDescription("收起播放器").performClick()
             ui.onNodeWithContentDescription("返回作品库").performClick()
@@ -216,7 +306,15 @@ class PlaybackFlowIntegrationTest {
             ui.onNodeWithTag("mini-player").performClick()
             ui.onNodeWithTag("subtitle-pane").assertIsDisplayed()
             ui.onNodeWithText("Track 2 second").assertIsDisplayed()
-            assertFalse("Mini-player expansion must preserve paused playback", model.player.value.playWhenReady)
-        } finally { instrumentation.runOnMainSync { c.pause(); MediaController.releaseFuture(future) } }
+            assertFalse(
+                "Mini-player expansion must preserve paused playback",
+                model.player.value.playWhenReady,
+            )
+        } finally {
+            instrumentation.runOnMainSync {
+                c.pause()
+                MediaController.releaseFuture(future)
+            }
+        }
     }
 }

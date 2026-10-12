@@ -2,13 +2,13 @@
 package app.whisp
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.content.Intent
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -23,10 +23,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    companion object { const val OPEN_PLAYER = "app.whisp.OPEN_PLAYER" }
+    companion object {
+        const val OPEN_PLAYER = "app.whisp.OPEN_PLAYER"
+    }
+
     private var playerRequest by mutableIntStateOf(0)
     private var hideRecents = true
     private var activityResumed = false
+
     private fun updateBackgroundProtection() {
         if (Build.VERSION.SDK_INT < 33) return
         // Some OEM overview screens use a live surface or retain the previous thumbnail.
@@ -34,48 +38,66 @@ class MainActivity : ComponentActivity() {
         val flag = android.view.WindowManager.LayoutParams.FLAG_SECURE
         if (hideRecents && !activityResumed) window.addFlags(flag) else window.clearFlags(flag)
     }
-    private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private val notifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         playerRequest = savedInstanceState?.getInt("player-request") ?: 0
         if (savedInstanceState == null && intent.action == OPEN_PLAYER) playerRequest++
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         val repository = (application as WhispApp).repository
         if (Build.VERSION.SDK_INT >= 33) {
             // Keep cold-start previews private until the persisted preference is available.
             setRecentsScreenshotEnabled(false)
             updateBackgroundProtection()
             lifecycleScope.launch {
-                repository.settingsUpdates.map { it.hideRecents }.distinctUntilChanged().collect {
-                    hideRecents = it
-                    setRecentsScreenshotEnabled(!it)
-                    updateBackgroundProtection()
-                }
+                repository.settingsUpdates
+                    .map { it.hideRecents }
+                    .distinctUntilChanged()
+                    .collect {
+                        hideRecents = it
+                        setRecentsScreenshotEnabled(!it)
+                        updateBackgroundProtection()
+                    }
             }
         }
-        val model = ViewModelProvider(this, object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = AppViewModel(repository) as T
-        })[AppViewModel::class.java]
+        val model =
+            ViewModelProvider(
+                this,
+                object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        AppViewModel(repository) as T
+                },
+            )[AppViewModel::class.java]
         setContent { WhispRoot(model, playerRequest) }
-        if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 33)
+            notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == OPEN_PLAYER) playerRequest++
     }
+
     override fun onResume() {
         super.onResume()
         activityResumed = true
         updateBackgroundProtection()
     }
+
     override fun onPause() {
         activityResumed = false
         updateBackgroundProtection()
         super.onPause()
     }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("player-request", playerRequest)
         super.onSaveInstanceState(outState)

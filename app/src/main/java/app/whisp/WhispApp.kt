@@ -7,6 +7,7 @@ import app.whisp.data.LibraryRepository
 class WhispApp : Application() {
     lateinit var repository: LibraryRepository
         private set
+
     override fun onCreate() {
         super.onCreate()
         repository = LibraryRepository(this)
