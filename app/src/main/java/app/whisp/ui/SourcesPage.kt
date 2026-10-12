@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+package app.whisp.ui
+
+import android.content.Intent
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadService
+import app.whisp.data.SourceEntity
+import app.whisp.playback.OfflineService
+import kotlinx.coroutines.launch
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
+    val sources by model.sources.collectAsStateWithLifecycle()
+    val busy by model.busy.collectAsStateWithLifecycle()
+    val downloads by model.downloads.collectAsStateWithLifecycle()
+    val library by model.library.collectAsStateWithLifecycle()
+    var adding by remember { mutableStateOf(false) }
+    var remote by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<SourceEntity?>(null) }
+    val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) model.action {
+            model.repository.context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val id = DocumentsContract.getTreeDocumentId(uri)
+            model.repository.addLocal(uri.toString(), id.substringAfterLast('/').substringAfter(':').ifBlank { "本地作品" })
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("来源", fontFamily = FontFamily.Serif, fontSize = 30.sp, modifier = Modifier.weight(1f))
+            IconAction(Icons.Outlined.Storage, "存储管理", Muted, storage)
+            IconAction(Icons.Outlined.Add, "添加来源") { adding = true }
+        } }
+        items(sources, key = { it.id }) { source ->
+            Row(Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(18.dp)).clickable { selected = source }
+                .padding(start = 18.dp, top = 10.dp, bottom = 10.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (source.kind == "local") Icons.Outlined.FolderOpen else Icons.Outlined.CloudQueue, null, tint = Rose)
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                    Text(source.name, fontSize = 17.sp)
+                    if (source.id in busy) Text("扫描中", color = Muted, fontSize = 13.sp)
+                    else if (source.error != null) Text("扫描失败", color = Rose, fontSize = 13.sp)
+                }
+                if (source.id in busy) CircularProgressIndicator(Modifier.size(22.dp).padding(3.dp), strokeWidth = 2.dp)
+                else IconAction(Icons.Outlined.Refresh, "刷新${source.name}", Muted) { model.repository.scheduleScan(source.id) }
+            }
+        }
+        if (sources.isEmpty()) item {
+            FilledTonalButton(onClick = { adding = true }, Modifier.fillMaxWidth().padding(vertical = 28.dp)) {
+                Icon(Icons.Outlined.CreateNewFolder, null); Spacer(Modifier.width(10.dp)); Text("添加作品")
+            }
+        }
+        val offlineWorks = library.filter { detail -> detail.tracks.any { downloads.containsKey(it.id) } }
+        if (offlineWorks.isNotEmpty()) item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("离线", fontSize = 20.sp, modifier = Modifier.weight(1f))
+            IconAction(Icons.Outlined.PlayArrow, "继续下载", Rose) {
+                DownloadService.sendResumeDownloads(model.repository.context, OfflineService::class.java, false)
+            }
+            IconAction(Icons.Outlined.Pause, "暂停下载", Muted) {
+                DownloadService.sendPauseDownloads(model.repository.context, OfflineService::class.java, false)
+            }
+        } }
+        items(offlineWorks, key = { it.work.id }) { detail ->
+            val states = detail.tracks.mapNotNull { downloads[it.id] }
+            val complete = model.repository.isOffline(detail)
+            val failed = states.any { it.state == Download.STATE_FAILED }
+            val percentage = states.map { it.percentDownloaded.takeIf { value -> value >= 0 } ?: 0f }.sum() / detail.tracks.size.coerceAtLeast(1)
+            Column(Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(18.dp)).padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(detail.work.title, Modifier.weight(1f), maxLines = 2, fontSize = 15.sp)
+                    IconAction(if (complete) Icons.Outlined.DeleteOutline else Icons.Outlined.Refresh,
+                        if (complete) "移除离线副本" else "重试下载", Muted) {
+                        if (complete) model.action { model.repository.removeOffline(detail.work.id) }
+                        else model.download(detail.work.id)
+                    }
+                }
+                if (!complete) {
+                    LinearProgressIndicator(progress = { (percentage / 100).coerceIn(0f, 1f) }, Modifier.fillMaxWidth().padding(vertical = 8.dp), trackColor = Raised)
+                    Text(if (failed) "下载失败" else "${percentage.toInt()}%", color = Muted, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+    if (adding) AlertDialog(onDismissRequest = { adding = false }, containerColor = Surface, title = { Text("添加来源") },
+        text = { Column {
+            TextButton(onClick = { adding = false; folder.launch(null) }, Modifier.fillMaxWidth()) { Icon(Icons.Outlined.FolderOpen, null); Spacer(Modifier.width(12.dp)); Text("本地目录") }
+            TextButton(onClick = { adding = false; remote = "SMB" }, Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Storage, null); Spacer(Modifier.width(12.dp)); Text("SMB") }
+            TextButton(onClick = { adding = false; remote = "WebDAV" }, Modifier.fillMaxWidth()) { Icon(Icons.Outlined.CloudQueue, null); Spacer(Modifier.width(12.dp)); Text("WebDAV") }
+        } }, confirmButton = { TextButton(onClick = { adding = false }) { Text("取消") } })
+    selected?.let { source -> AlertDialog(onDismissRequest = { selected = null }, containerColor = Surface,
+        title = { Text(source.name) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(source.root, color = Muted, fontSize = 13.sp)
+            source.error?.let { Text(it, color = Rose) }
+        } }, confirmButton = { TextButton(onClick = { model.repository.scheduleScan(source.id); selected = null }) { Text("刷新") } },
+        dismissButton = { TextButton(onClick = { model.action { model.repository.removeSource(source.id) }; selected = null }) { Text("移除来源") } }) }
+    remote?.let { kind -> RemoteDialog(model, kind) { remote = null } }
+}
+
+@Composable private fun RemoteDialog(model: AppViewModel, kind: String, dismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var connecting by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(onDismissRequest = { if (!connecting) dismiss() }, containerColor = Surface, title = { Text(kind) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true)
+            OutlinedTextField(address, { address = it }, label = { Text("地址") }, placeholder = { Text(if (kind == "SMB") "smb://nas.example/media/Audio/" else "https://nas.example/Audio/") }, singleLine = true)
+            OutlinedTextField(username, { username = it }, label = { Text("账号") }, singleLine = true)
+            OutlinedTextField(password, { password = it }, label = { Text("密码") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+            error?.let { Text(it, color = Rose) }
+        } }, confirmButton = { TextButton(enabled = !connecting, onClick = { connecting = true; error = null
+            scope.launch {
+                try {
+                    if (kind == "SMB") model.repository.addSmb(name, address, username, password)
+                    else model.repository.addWebDav(name, address, username, password)
+                    dismiss()
+                }
+                catch (e: Exception) { error = e.message ?: "连接失败" }
+                finally { connecting = false }
+            }
+        }) { if (connecting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Text("连接") } },
+        dismissButton = { TextButton(enabled = !connecting, onClick = dismiss) { Text("取消") } })
+}

@@ -1,0 +1,20 @@
+Whisp
+Copyright (C) 2026 Whisp contributors
+
+SPDX-License-Identifier: LGPL-3.0-or-later
+
+Whisp is free software: you can redistribute it and/or modify it under
+the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Whisp is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
+License for more details.
+
+The LGPL text is provided in LICENSE. The GPL version 3 text incorporated
+by the LGPL is provided in COPYING.
+
+Third-party dependencies and the Gradle Wrapper retain their own licenses.
+The Gradle Wrapper scripts include their original Apache-2.0 notices.
