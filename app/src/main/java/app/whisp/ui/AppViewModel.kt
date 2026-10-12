@@ -11,6 +11,9 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.*
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.cachedIn
 import app.whisp.data.*
 import app.whisp.playback.PlaybackService
 import java.util.UUID
@@ -42,6 +45,27 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     val settings = repository.settings
     val downloads = repository.downloads
     val busy = repository.busy
+    val asmrQuery = MutableStateFlow<AsmrQuery?>(null)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val asmrCatalog =
+        asmrQuery
+            .filterNotNull()
+            .distinctUntilChanged()
+            .flatMapLatest { query ->
+                Pager(
+                        PagingConfig(
+                            pageSize = 20,
+                            initialLoadSize = 20,
+                            prefetchDistance = 4,
+                            maxSize = 100,
+                            enablePlaceholders = false,
+                        ),
+                    ) {
+                        AsmrPagingSource { page -> repository.asmrPage(query, page) }
+                    }
+                    .flow
+            }
+            .cachedIn(viewModelScope)
     // Event snapshots never advance merely because playback time passes.
     val player = MutableStateFlow(PlaybackState())
     val position = MutableStateFlow(0L)

@@ -6,3 +6,6 @@
 -keep class kotlin.** { *; }
 -keep class kotlinx.coroutines.** { *; }
 -keep class com.google.common.** { *; }
+# MockWebServer in the test APK instantiates the shared OkHttp and Okio runtime.
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }

@@ -63,6 +63,13 @@ class LibraryRepository(val context: Context) {
             .followSslRedirects(false)
             .build()
     val dav = WebDavClient(http)
+    private val onlineHttp = http.newBuilder().followRedirects(true).build()
+
+    private fun asmrClient(source: SourceEntity): AsmrOneClient {
+        require(source.kind == "asmrone") { "来源类型不匹配" }
+        return AsmrOneClient(onlineHttp, source.root.toHttpUrlOrNull() ?: error("来源地址无效"))
+    }
+
     val smb = SmbClient { Log.i("WhispScan", it) }
     val library = dao.observeLibrary().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val sources = dao.observeSources().stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -146,6 +153,23 @@ class LibraryRepository(val context: Context) {
         }
     private val networkFactory = DataSource.Factory {
         val fallback = httpFactory.createDataSource()
+        val online =
+            ResolvingDataSource.Factory(
+                    OkHttpDataSource.Factory(onlineHttp)
+                        .setDefaultRequestProperties(AsmrOneClient.MEDIA_HEADERS),
+                ) { spec ->
+                    val asset = spec.uri.lastPathSegment ?: throw IOException("文件标识无效")
+                    val sourceId = spec.uri.authority ?: throw IOException("来源未关联")
+                    val location =
+                        runBlocking(Dispatchers.IO) {
+                            val source = dao.source(sourceId) ?: throw IOException("来源已移除")
+                            require(source.kind == "asmrone") { "来源类型不匹配" }
+                            dao.locations(asset).firstOrNull { it.sourceId == sourceId }
+                                ?: throw IOException("文件已移除")
+                        }
+                    spec.withUri(location.uri.toUri())
+                }
+                .createDataSource()
         val smbData = SmbDataSource { uri ->
             val sourceId = uri.toUri().authority ?: throw IOException("来源未关联")
             val source =
@@ -159,10 +183,16 @@ class LibraryRepository(val context: Context) {
             override fun addTransferListener(listener: TransferListener) {
                 fallback.addTransferListener(listener)
                 smbData.addTransferListener(listener)
+                online.addTransferListener(listener)
             }
 
             override fun open(spec: DataSpec): Long {
-                active = if (spec.uri.scheme == "whisp-smb") smbData else fallback
+                active =
+                    when (spec.uri.scheme) {
+                        "whisp-smb" -> smbData
+                        "whisp-asmr" -> online
+                        else -> fallback
+                    }
                 return active.open(spec)
             }
 
@@ -414,6 +444,81 @@ class LibraryRepository(val context: Context) {
         return id
     }
 
+    suspend fun addAsmrOne(): String {
+        val id = stableId("asmr.one")
+        if (dao.source(id) == null)
+            dao.putSource(SourceEntity(id, "ASMR.ONE", "asmrone", AsmrOneClient.API_ROOT))
+        return id
+    }
+
+    suspend fun asmrPage(query: AsmrQuery, page: Int): AsmrPage {
+        val source = dao.source(query.sourceId) ?: error("来源已移除")
+        return asmrClient(source).catalog(page, query.text, query.order, query.subtitlesOnly)
+    }
+
+    suspend fun importAsmrWork(sourceId: String, id: Long): String {
+        val source = dao.source(sourceId) ?: error("来源已移除")
+        val client = asmrClient(source)
+        val work = client.work(id)
+        require(work.id == id) { "作品编号不匹配" }
+        val generation = System.currentTimeMillis()
+        val indexed = client.index(work, sourceId, generation)
+        currentCoroutineContext().ensureActive()
+        database.withTransaction {
+            val latestSource = dao.source(sourceId) ?: error("来源已移除")
+            val old = dao.details(work.workId)
+            val newWork = indexed.works.single()
+            val savedWork =
+                old?.work?.let {
+                    newWork.copy(
+                        title = it.title,
+                        artist = it.artist,
+                        favorite = it.favorite,
+                        coverId = it.coverId ?: newWork.coverId,
+                        addedAt = it.addedAt,
+                        offlineAttachments = it.offlineAttachments,
+                    )
+                } ?: newWork
+            val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
+            val pinned =
+                oldTracks.values
+                    .filter {
+                        downloadManager.downloadIndex.getDownload(it.id)?.state ==
+                            Download.STATE_COMPLETED
+                    }
+                    .map { it.id }
+            dao.deleteWorkSourceLocations(work.workId, sourceId)
+            dao.putWorks(listOf(savedWork))
+            dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
+            if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
+            dao.putTracks(
+                indexed.tracks.map { track ->
+                    track.copy(
+                        durationMs =
+                            track.durationMs.takeIf { it > 0 }
+                                ?: oldTracks[track.id]?.durationMs
+                                ?: 0,
+                    )
+                },
+            )
+            dao.putAttachments(indexed.attachments)
+            dao.putLocations(indexed.locations)
+            dao.putSource(latestSource.copy(lastScan = generation, error = null))
+        }
+        storageChanged()
+        return work.workId
+    }
+
+    suspend fun ensureCatalogArtwork(id: String, url: String, sourceId: String): File? =
+        imageRequest("cover:$id") {
+            storageReady.await()
+            val source = dao.source(sourceId) ?: error("来源已移除")
+            artwork(id)
+                ?: cacheArtwork(id, asmrClient(source).bytes(url, 16 * 1024 * 1024)).also {
+                    artworkRevision.update { it + 1 }
+                }
+        }
+
     fun scheduleScan(id: String) {
         if (id in busy.value) return
         val request =
@@ -432,6 +537,17 @@ class LibraryRepository(val context: Context) {
         val startTime = android.os.SystemClock.elapsedRealtime()
         try {
             Log.i("WhispScan", "Started ${source.kind} scan")
+            if (source.kind == "asmrone") {
+                for (workId in dao.sourceWorkIds(source.id)) {
+                    currentCoroutineContext().ensureActive()
+                    val id = dao.work(workId)?.rj?.removePrefix("RJ")?.toLongOrNull() ?: continue
+                    importAsmrWork(source.id, id)
+                }
+                dao.source(source.id)?.let {
+                    dao.putSource(it.copy(lastScan = System.currentTimeMillis(), error = null))
+                }
+                return
+            }
             val entries =
                 when (source.kind) {
                     "local" -> LocalDirectory(context).walk(source.root)
@@ -622,9 +738,13 @@ class LibraryRepository(val context: Context) {
                 return it.request.uri.toString()
             }
         val options = dao.locations(id)
-        return options
-            .firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
-            ?.uri ?: options.firstOrNull()?.uri ?: throw IOException("文件已移动或来源已移除")
+        val location =
+            options.firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
+                ?: options.firstOrNull()
+                ?: throw IOException("文件已移动或来源已移除")
+        return if (dao.source(location.sourceId)?.kind == "asmrone")
+            "whisp-asmr://${location.sourceId}/$id"
+        else location.uri
     }
 
     fun artwork(id: String?): File? = id?.let { asset ->
@@ -767,6 +887,13 @@ class LibraryRepository(val context: Context) {
                 "file" ->
                     context.contentResolver.openInputStream(uri)?.use { boundedRead(it, limit) }
                         ?: throw IOException("文件不可读")
+                "whisp-asmr" -> {
+                    val location =
+                        dao.locations(id).firstOrNull { it.sourceId == uri.authority }
+                            ?: error("来源已移除")
+                    val source = dao.source(location.sourceId) ?: error("来源已移除")
+                    asmrClient(source).bytes(location.uri, limit)
+                }
                 else -> {
                     val location =
                         dao.locations(id).firstOrNull { it.uri == uri.toString() } ?: error("来源未关联")

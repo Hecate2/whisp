@@ -348,22 +348,23 @@ class SystemMediaIntegrationTest {
 
     companion object {
         /** Zero PCM samples guarantee silence, including media-button playback. */
-        internal fun silentWave(directory: File): File {
+        internal fun silentWave(directory: File, channels: Int = 1): File {
             val samples = 16000 * 40
-            val buffer = ByteBuffer.allocate(44 + samples * 2).order(ByteOrder.LITTLE_ENDIAN)
+            val bytes = samples * channels * 2
+            val buffer = ByteBuffer.allocate(44 + bytes).order(ByteOrder.LITTLE_ENDIAN)
             buffer
                 .put("RIFF".toByteArray())
-                .putInt(36 + samples * 2)
+                .putInt(36 + bytes)
                 .put("WAVEfmt ".toByteArray())
                 .putInt(16)
                 .putShort(1)
-                .putShort(1)
+                .putShort(channels.toShort())
                 .putInt(16000)
-                .putInt(32000)
-                .putShort(2)
+                .putInt(16000 * channels * 2)
+                .putShort((channels * 2).toShort())
                 .putShort(16)
                 .put("data".toByteArray())
-                .putInt(samples * 2)
+                .putInt(bytes)
             return File(directory, "system-silence.wav").apply { writeBytes(buffer.array()) }
         }
     }

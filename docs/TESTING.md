@@ -59,6 +59,10 @@ adb shell am instrument -w -e class app.whisp.PerformanceIntegrationTest app.whi
 
 `PerformanceIntegrationTest`、`SystemMediaIntegrationTest`、`MotionNavigationIntegrationTest` 和 `StorageIntegrationTest` 的样本由测试自行生成。`SmbIntegrationTest`、`PlaybackFlowIntegrationTest` 和 `StorageAudioIntegrationTest` 使用专用 SMB 共享，地址与测试凭据通过 instrumentation 参数传入；参数定义见各测试源码。
 
+## ASMR.ONE 来源测试
+
+`AsmrOneIntegrationTest` 使用设备内的 MockWebServer 和生成的立体声静音样本，验证在线目录、搜索、按需入库、刷新后的身份与收藏、字幕、封面、下载及来源移除后的离线播放。它同时验证网络请求与 NAS 凭据的隔离，测试包为 `app.whisp.smoketest`。
+
 ## WebDAV 与本地目录选择器测试
 
 这两项测试在专用测试设备上运行，使用 Debug 包和预先推送的生成样本。测试会建立媒体索引，本地目录选择器测试会创建 `Download/WhispFixture`。目录选择器测试使用英文系统按钮文字。

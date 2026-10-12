@@ -28,6 +28,7 @@ export WHISP_BLACK="$PWD/.venv/bin/black"
 | Compose BOM / Material 3 | 2026.09.00 / 1.5.0-beta01 |
 | Activity / Core | 1.13.0 / 1.19.1 |
 | Lifecycle / Navigation 3 | 2.11.0 / 1.2.0 |
+| Paging 3 | 3.5.2 |
 | Media3 / SMBJ | 1.11.1 / 0.15.0 |
 | Room / DataStore / WorkManager | 2.8.5 / 1.2.1 / 2.12.0 |
 | Coil / OkHttp / Okio | 3.6.3 / 5.5.0 / 3.18.2 |
@@ -50,6 +51,7 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 | ViewModel 创建 | AndroidX `viewModelFactory` |
 | 文件原子替换 | Java NIO `Files.move` |
 | HTTP / SMB 传输 | OkHttp / SMBJ |
+| 在线目录分页、缓存与重试 | AndroidX Paging 3 |
 | 播放、下载与音频缓存 | Media3 |
 | 索引、设置与任务 | Room / DataStore / WorkManager |
 
@@ -58,6 +60,12 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 在线播放缓存的淘汰器与图片文件缓存负责运行时容量调整、永久资料分区及文件变化通知。图片优化使用 Android Bitmap API，编码参数与容量限制由应用定义。
 
 ## API 与兼容范围
+
+ASMR.ONE 使用公开的作品列表、搜索、作品信息和曲目接口；端点见 `AsmrOneClient`。Paging 3 负责分页、缓存、取消与重试，JSON 使用 kotlinx.serialization 解析。作品信息在用户打开作品时写入 Room，来源更新刷新已加入的作品。
+
+在线媒体使用 `whisp-asmr` 位置标识与独立 HTTP 数据源，播放、字幕及下载共享同一地址映射。作品 ID 由站点编号建立，曲目与资料 ID 由作品和相对路径建立。位置 ID 包含来源、媒体 ID 与 URL，使多个媒体可以共用同一文件地址。刷新保留标题编辑、收藏、书签和播放进度。
+
+独立设备测试在 `smoke` 规则中保留 MockWebServer 使用的 OkHttp / Okio 类边界；正式 Release 使用常规 R8 裁剪规则。
 
 数据库字段和内部 ID 格式保持兼容。新测试覆盖既有 ID 格式、WebVTT 注释与样式、重叠字幕、重复时间点和极大时间位置。
 

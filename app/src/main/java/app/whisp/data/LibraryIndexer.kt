@@ -74,9 +74,15 @@ object LibraryIndexer {
         return dirs.take(index + 1).joinToString("/")
     }
 
-    fun index(files: List<FileEntry>, sourceId: String, generation: Long): IndexedLibrary {
+    fun index(
+        files: List<FileEntry>,
+        sourceId: String,
+        generation: Long,
+        workOverride: WorkEntity? = null,
+    ): IndexedLibrary {
         // Determine each file's work once, instead of walking every path again for every work.
-        val fileGroups = files.filterNot { it.directory }.groupBy { rootOf(it.path) }
+        val fileGroups =
+            files.filterNot { it.directory }.groupBy { workOverride?.rj ?: rootOf(it.path) }
         val groups =
             fileGroups
                 .mapValues { (_, entries) ->
@@ -92,7 +98,8 @@ object LibraryIndexer {
             val rj = rjPattern.find(name)?.value?.uppercase()
             val audioSignature =
                 group.map { "${it.path.removePrefix("$root/")}:${it.size}" }.sorted()
-            val workId = stableId("${rj ?: name}|${audioSignature.joinToString("|")}")
+            val workId =
+                workOverride?.id ?: stableId("${rj ?: name}|${audioSignature.joinToString("|")}")
             val inWork = fileGroups.getValue(root)
             val resourceFiles = inWork.filter {
                 it.path.extension() !in audioExtensions &&
@@ -152,11 +159,13 @@ object LibraryIndexer {
                     .lastOrNull()
                     ?.takeUnless { rjPattern.containsMatchIn(it) }
                     ?.replace(Regex("^[「『]|[」』]系列$"), "")
-            works += WorkEntity(workId, rj, title, name, series = series, coverId = cover)
+            works +=
+                workOverride?.copy(coverId = workOverride.coverId ?: cover)
+                    ?: WorkEntity(workId, rj, title, name, series = series, coverId = cover)
             fun addLocation(file: FileEntry, id: String) {
                 locations +=
                     LocationEntity(
-                        stableId("$sourceId|${file.uri}"),
+                        stableId("$sourceId|$id|${file.uri}"),
                         id,
                         sourceId,
                         file.uri,
@@ -209,7 +218,7 @@ object LibraryIndexer {
                             subtitleId = subtitle,
                             scriptId = match("script"),
                             bonus =
-                                Regex("附赠|おまけ|omake|bonus", RegexOption.IGNORE_CASE)
+                                Regex("附赠|特典|おまけ|omake|bonus", RegexOption.IGNORE_CASE)
                                     .containsMatchIn(relative),
                         )
                     tracks += track

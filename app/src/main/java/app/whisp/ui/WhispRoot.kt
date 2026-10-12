@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,15 +72,19 @@ internal fun Artwork(
     modifier: Modifier,
     scale: androidx.compose.ui.layout.ContentScale = androidx.compose.ui.layout.ContentScale.Crop,
     sharedKey: String? = null,
+    catalogUrl: String? = null,
+    catalogSourceId: String? = null,
 ) {
     val revision by model.repository.artworkRevision.collectAsStateWithLifecycle()
     val reload by model.repository.artworkReload.collectAsStateWithLifecycle()
     val file = remember(id, revision) { model.repository.artwork(id) }
-    LaunchedEffect(id, reload, file == null) {
+    LaunchedEffect(id, reload, file == null, catalogUrl, catalogSourceId) {
         if (file == null)
             id?.let {
                 try {
-                    model.repository.ensureArtwork(it)
+                    if (catalogUrl != null && catalogSourceId != null)
+                        model.repository.ensureCatalogArtwork(it, catalogUrl, catalogSourceId)
+                    else model.repository.ensureArtwork(it)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {}
@@ -112,7 +118,21 @@ internal fun Artwork(
                 )
                 .build()
         }
-    AsyncImage(request, description, artworkModifier, contentScale = scale)
+    var loaded by remember(file, file?.lastModified(), file?.length()) { mutableStateOf(false) }
+    AsyncImage(
+        request,
+        description,
+        artworkModifier.semantics { stateDescription = if (loaded) "封面已加载" else "封面加载中" },
+        contentScale = scale,
+        onSuccess = { loaded = true },
+        onError = {
+            if (file != null)
+                android.util.Log.w(
+                    "WhispArtwork",
+                    "Image load failed: ${it.result.throwable.javaClass.simpleName}",
+                )
+        },
+    )
 }
 
 data class Route(val page: String, val id: String = "") : NavKey
@@ -382,7 +402,19 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                         },
                                                     )
                                                 "sources" ->
-                                                    SourcesPage(model) { push(Route("storage")) }
+                                                    SourcesPage(
+                                                        model,
+                                                        { push(Route("asmrone", it)) },
+                                                    ) {
+                                                        push(Route("storage"))
+                                                    }
+                                                "asmrone" ->
+                                                    AsmrOnePage(
+                                                        model,
+                                                        destination.id,
+                                                        { stack.removeAt(stack.lastIndex) },
+                                                        { push(Route("detail", it)) },
+                                                    )
                                                 "storage" ->
                                                     StoragePage(model) {
                                                         stack.removeAt(stack.lastIndex)
@@ -627,7 +659,7 @@ private fun LibraryPage(
                         key = { _, it -> it.work.id },
                         span = { index, _ -> GridItemSpan(if (index == 0) 2 else 1) },
                     ) { index, detail ->
-                        WorkCard(detail, model, index == 0) { open(detail.work.id) }
+                        WorkCard(detail.work, model, index == 0) { open(detail.work.id) }
                     }
                 }
         }
@@ -635,10 +667,12 @@ private fun LibraryPage(
 }
 
 @Composable
-private fun WorkCard(
-    detail: WorkDetails,
+internal fun WorkCard(
+    work: WorkEntity,
     model: AppViewModel,
     featured: Boolean,
+    catalogUrl: String? = null,
+    catalogSourceId: String? = null,
     onClick: () -> Unit,
 ) {
     Box(
@@ -650,10 +684,12 @@ private fun WorkCard(
     ) {
         Artwork(
             model,
-            detail.work.coverId,
-            detail.work.title,
+            work.coverId,
+            work.title,
             Modifier.matchParentSize(),
-            sharedKey = detail.work.id,
+            sharedKey = work.id,
+            catalogUrl = catalogUrl,
+            catalogSourceId = catalogSourceId,
         )
         Box(
             Modifier.matchParentSize()
@@ -664,7 +700,7 @@ private fun WorkCard(
                 ),
         )
         Text(
-            shortTitle(detail.work.title),
+            shortTitle(work.title),
             color = Cream,
             fontFamily = FontFamily.Serif,
             fontSize = if (featured) 26.sp else 19.sp,
@@ -846,7 +882,7 @@ private fun DetailPage(
             else ->
                 items(
                     detail.attachments
-                        .filter { it.kind !in setOf("script", "subtitle") }
+                        .filter { it.kind !in setOf("script", "subtitle", "cover") }
                         .sortedBy { it.relativePath },
                     key = { it.id },
                 ) {

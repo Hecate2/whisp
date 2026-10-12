@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
+internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage: () -> Unit) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     val downloads by model.downloads.collectAsStateWithLifecycle()
@@ -74,7 +74,9 @@ internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
             Row(
                 Modifier.fillMaxWidth()
                     .background(Surface, RoundedCornerShape(18.dp))
-                    .clickable { selected = source }
+                    .clickable {
+                        if (source.kind == "asmrone") online(source.id) else selected = source
+                    }
                     .padding(start = 18.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -94,6 +96,10 @@ internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
                         Modifier.size(22.dp).padding(3.dp),
                         strokeWidth = 2.dp,
                     )
+                else if (source.kind == "asmrone")
+                    IconAction(Icons.Outlined.MoreVert, "管理${source.name}", Muted) {
+                        selected = source
+                    }
                 else
                     IconAction(Icons.Outlined.Refresh, "刷新${source.name}", Muted) {
                         model.repository.scheduleScan(source.id)
@@ -183,6 +189,17 @@ internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
                     TextButton(
                         onClick = {
                             adding = false
+                            model.action { online(model.repository.addAsmrOne()) }
+                        },
+                        Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.Headphones, null)
+                        Spacer(Modifier.width(12.dp))
+                        Text("ASMR.ONE")
+                    }
+                    TextButton(
+                        onClick = {
+                            adding = false
                             folder.launch(null)
                         },
                         Modifier.fillMaxWidth(),
@@ -224,18 +241,28 @@ internal fun SourcesPage(model: AppViewModel, storage: () -> Unit) {
             title = { Text(source.name) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(source.root, color = Muted, fontSize = 13.sp)
+                    if (source.kind != "asmrone") Text(source.root, color = Muted, fontSize = 13.sp)
                     source.error?.let { Text(it, color = Rose) }
+                    if (source.kind == "asmrone")
+                        TextButton(
+                            onClick = {
+                                model.repository.scheduleScan(source.id)
+                                selected = null
+                            },
+                        ) {
+                            Text("更新已加入作品")
+                        }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        model.repository.scheduleScan(source.id)
+                        if (source.kind == "asmrone") online(source.id)
+                        else model.repository.scheduleScan(source.id)
                         selected = null
                     },
                 ) {
-                    Text("刷新")
+                    Text(if (source.kind == "asmrone") "浏览" else "刷新")
                 }
             },
             dismissButton = {
