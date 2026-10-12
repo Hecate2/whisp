@@ -3,6 +3,7 @@ package app.whisp
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.whisp.data.AsmrOneClient
 import app.whisp.data.DlsiteClient
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
@@ -27,7 +28,8 @@ class DlsiteLiveIntegrationTest {
                 .followRedirects(true)
                 .addInterceptor { chain ->
                     val phase =
-                        if (chain.request().url.encodedPath.endsWith("ajax")) "info" else "page"
+                        if (chain.request().url.encodedPath.endsWith("product.json")) "product"
+                        else "info"
                     try {
                         val response = chain.proceed(chain.request())
                         requests.add("$phase:HTTP ${response.code}")
@@ -42,6 +44,20 @@ class DlsiteLiveIntegrationTest {
         try {
             val metadata = DlsiteClient(http).work(rj!!)
             assertTrue(metadata.title.isNotBlank())
+            if (InstrumentationRegistry.getArguments().getString("probeAsmr") == "true") {
+                val client = AsmrOneClient(http)
+                val catalog = client.work(rj.drop(2).toLong())
+                val indexed =
+                    client.index(
+                        metadata.applyTo(catalog),
+                        "probe-source",
+                        System.currentTimeMillis(),
+                    )
+                assertTrue(indexed.tracks.isNotEmpty())
+                println(
+                    "DLSITE_PROBE tracks=${indexed.tracks.size}; subtitles=${indexed.tracks.count { it.subtitleId != null }}",
+                )
+            }
             println(
                 "DLSITE_PROBE success; elapsed=${android.os.SystemClock.elapsedRealtime() - started}; requests=$requests",
             )

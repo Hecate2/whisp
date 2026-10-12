@@ -22,8 +22,8 @@ android {
         applicationId = "app.whisp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.4.0-rc.2"
+        versionCode = 13
+        versionName = "0.4.0-rc.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         if (!splitApks) ndk { abiFilters += supportedAbis }
     }

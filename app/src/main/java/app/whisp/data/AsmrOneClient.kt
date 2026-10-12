@@ -19,6 +19,7 @@ data class AsmrWork(
     val coverUrl: String?,
     val coverPath: String = "_asmr-cover/main.jpg",
     val series: String? = null,
+    val facets: List<AsmrFacet> = emptyList(),
 ) {
     val workId
         get() = stableId("asmr.one|work|$id")
@@ -219,7 +220,24 @@ class AsmrOneClient(
                 .ifBlank { body.text("samCoverUrl") }
                 .takeIf(String::isNotBlank)
                 ?.let { resourceUrl(it).toString() }
-        return AsmrWork(id, body.text("title").ifBlank { rj }, rj, artist, cover)
+        val facets = mutableListOf<AsmrFacet>()
+        fun add(kind: String, name: String) {
+            if (name.isNotBlank() && name.length <= 160 && '$' !in name)
+                facets += AsmrFacet(kind, name)
+        }
+        voices.forEach { add("va", it) }
+        add("circle", (body["circle"] as? JsonObject)?.text("name").orEmpty())
+        (body["tags"] as? JsonArray).orEmpty().forEach {
+            add("tagw", (it as? JsonObject)?.text("name").orEmpty())
+        }
+        return AsmrWork(
+            id,
+            body.text("title").ifBlank { rj },
+            rj,
+            artist,
+            cover,
+            facets = facets.distinct(),
+        )
     }
 
     private fun JsonObject.text(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()

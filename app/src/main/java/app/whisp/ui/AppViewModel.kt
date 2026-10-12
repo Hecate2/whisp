@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.os.Bundle
 import android.util.LruCache
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
@@ -19,6 +20,14 @@ import app.whisp.playback.PlaybackService
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+
+data class AsmrPreviewState(
+    val sourceId: String = "",
+    val seed: AsmrWork? = null,
+    val preview: AsmrPreview? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+)
 
 data class PlaybackState(
     val trackId: String? = null,
@@ -37,7 +46,10 @@ data class PlaybackState(
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
-class AppViewModel(val repository: LibraryRepository) : ViewModel() {
+class AppViewModel(
+    val repository: LibraryRepository,
+    private val savedState: SavedStateHandle = SavedStateHandle(),
+) : ViewModel() {
     val library = repository.library
     val sources = repository.sources
     val progress = repository.progress
@@ -45,7 +57,62 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     val settings = repository.settings
     val downloads = repository.downloads
     val busy = repository.busy
-    val asmrQuery = MutableStateFlow<AsmrQuery?>(null)
+    val asmrQuery = MutableStateFlow(decodeAsmrQuery(savedState["asmr-query"]))
+    val asmrHistory = repository.asmrSearchHistory
+    val asmrFacets = MutableStateFlow<List<AsmrFacet>>(emptyList())
+    val asmrPreview = MutableStateFlow(AsmrPreviewState())
+    private var previewJob: Job? = null
+
+    fun submitAsmrQuery(query: AsmrQuery) {
+        asmrQuery.value = query.copy(text = normalizedAsmrInput(query.text))
+        action { repository.rememberAsmrSearch(query.text) }
+    }
+
+    fun prepareAsmrPreview(
+        sourceId: String,
+        seed: AsmrWork,
+        metadataClient: DlsiteClient = repository.dlsite,
+        retry: Boolean = false,
+    ) {
+        val current = asmrPreview.value
+        if (!retry && current.sourceId == sourceId && current.seed?.id == seed.id) return
+        previewJob?.cancel()
+        asmrPreview.value = AsmrPreviewState(sourceId, seed, loading = true)
+        previewJob = viewModelScope.launch {
+            try {
+                val preview = repository.previewAsmrWork(sourceId, seed.id, metadataClient)
+                asmrPreview.value = AsmrPreviewState(sourceId, seed, preview)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                asmrPreview.value = AsmrPreviewState(sourceId, seed, error = e.message ?: "作品读取失败")
+            }
+        }
+    }
+
+    fun restoreAsmrPreview(sourceId: String, id: Long) {
+        previewJob?.cancel()
+        asmrPreview.value = AsmrPreviewState(sourceId, loading = true)
+        previewJob = viewModelScope.launch {
+            try {
+                val seed = repository.asmrWork(sourceId, id)
+                asmrPreview.value = AsmrPreviewState(sourceId, seed, loading = true)
+                val preview = repository.previewAsmrWork(sourceId, id)
+                asmrPreview.value = AsmrPreviewState(sourceId, seed, preview)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                asmrPreview.value =
+                    asmrPreview.value.copy(loading = false, error = e.message ?: "作品读取失败")
+            }
+        }
+    }
+
+    suspend fun saveAsmrPreview(preview: AsmrPreview): WorkDetails {
+        repository.addAsmrPreview(preview)
+        return repository.dao.details(preview.work.workId) ?: error("作品保存失败")
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val asmrCatalog =
         asmrQuery
@@ -61,7 +128,15 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
                             enablePlaceholders = false,
                         ),
                     ) {
-                        AsmrPagingSource { page -> repository.asmrPage(query, page) }
+                        AsmrPagingSource { page ->
+                            repository.asmrPage(query, page).also { result ->
+                                asmrFacets.update { previous ->
+                                    (result.works.flatMap { it.facets } + previous)
+                                        .distinct()
+                                        .take(256)
+                                }
+                            }
+                        }
                     }
                     .flow
             }
@@ -102,6 +177,9 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
             .buildAsync()
 
     init {
+        viewModelScope.launch {
+            asmrQuery.collect { savedState["asmr-query"] = it?.let(::encodeAsmrQuery) }
+        }
         future.addListener(
             {
                 if (!closed)

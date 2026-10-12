@@ -12,8 +12,8 @@ import org.junit.Test
 class DlsiteClientTest {
     private val info =
         """{"RJ00000001":{"product_id":"RJ00000001","work_name":"官方示例 &amp; 标题","maker_name":"示例社团","work_image":"//img.dlsite.jp/example.jpg","title_name":"示例系列"}}"""
-    private val page =
-        """<h1 id="work_name">官方示例</h1><table id="work_outline"><tr><th>声優</th><td><a>示例甲</a> / <a>示例乙</a><a>示例甲</a></td></tr></table>"""
+    private val product =
+        """[{"product_id":"RJ00000001","work_name":"官方示例 &amp; 标题","maker_name":"示例社团","creaters":{"voice_by":[{"name":"示例甲"},{"name":"示例乙"},{"name":"示例甲"}]},"image_main":{"url":"//img.dlsite.jp/example.jpg"},"title_name":"示例系列"}]"""
 
     @Test
     fun officialFieldsReplaceCatalogMetadataWithoutChangingAudioIdentity() = runBlocking {
@@ -22,9 +22,7 @@ class DlsiteClientTest {
             server.dispatcher =
                 object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest) =
-                        MockResponse.Builder()
-                            .body(if (request.url.encodedPath.endsWith("/ajax")) info else page)
-                            .build()
+                        MockResponse.Builder().body(product).build()
                 }
             val metadata = DlsiteClient(OkHttpClient(), server.url("/")).work("rj00000001")
             assertEquals("官方示例 & 标题", metadata.title)
@@ -37,16 +35,9 @@ class DlsiteClientTest {
             assertNotEquals(old.coverId, new.coverId)
             assertEquals(metadata.artist, new.entity().originalArtist)
             assertTrue(isAsmrOneWork(new.entity()))
-            val requests = listOf(server.takeRequest(), server.takeRequest())
-            assertTrue(
-                requests.any {
-                    it.url.encodedPath == "/maniax/product/info/ajax" &&
-                        it.url.queryParameter("product_id") == "RJ00000001"
-                },
-            )
-            assertTrue(
-                requests.any { it.url.encodedPath == "/maniax/work/=/product_id/RJ00000001.html" },
-            )
+            val requests = listOf(server.takeRequest())
+            assertEquals("/maniax/api/=/product.json", requests.single().url.encodedPath)
+            assertEquals("RJ00000001", requests.single().url.queryParameter("workno"))
             requests.forEach {
                 assertEquals("ja_JP", it.url.queryParameter("locale"))
                 assertEquals("ja-JP", it.headers["Accept-Language"])
@@ -57,12 +48,25 @@ class DlsiteClientTest {
     }
 
     @Test
-    fun circleIsTheOfficialFallbackAndAnAgeGateIsRejected() {
+    fun keyedInfoAcceptsAnOmittedIdAndRetainsOfficialCircle() {
         val client = DlsiteClient(OkHttpClient())
-        val result = client.parse("RJ00000001", info, "<h1 id='work_name'>示例</h1>")
+        val result =
+            client.parseInfo("RJ00000001", info.replace("\"product_id\":\"RJ00000001\",", ""))
         assertEquals("示例社团", result.artist)
-        assertThrows(IllegalArgumentException::class.java) {
-            client.parse("RJ00000001", info, "<html>入口</html>")
+        assertEquals("官方示例 & 标题", result.title)
+    }
+
+    @Test
+    fun unavailableFullEndpointFallsBackToOfficialKeyedInfo() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(503).build())
+            server.enqueue(MockResponse.Builder().body(info).build())
+            assertEquals(
+                "示例社团",
+                DlsiteClient(OkHttpClient(), server.url("/")).work("RJ00000001").artist,
+            )
+            assertEquals(2, server.requestCount)
         }
     }
 
@@ -70,10 +74,9 @@ class DlsiteClientTest {
     fun mismatchedIdentifiersAndUntrustedCoversAreRejected() {
         val client = DlsiteClient(OkHttpClient())
         assertThrows(IllegalArgumentException::class.java) {
-            client.parse(
+            client.parseInfo(
                 "RJ00000001",
                 info.replace("\"product_id\":\"RJ00000001\"", "\"product_id\":\"RJ00000002\""),
-                page,
             )
         }
         for (url in
@@ -83,14 +86,14 @@ class DlsiteClientTest {
                 "https://media.example/cover.jpg",
             )) {
             assertThrows(IllegalArgumentException::class.java) {
-                client.parse("RJ00000001", info.replace("//img.dlsite.jp/example.jpg", url), page)
+                client.parseInfo("RJ00000001", info.replace("//img.dlsite.jp/example.jpg", url))
             }
         }
-        assertThrows(IOException::class.java) { client.parse("RJ00000001", "{}", page) }
+        assertThrows(IOException::class.java) { client.parseInfo("RJ00000001", "{}") }
     }
 
     @Test
-    fun cancellationStopsBothOfficialRequests() = runBlocking {
+    fun cancellationStopsTheOfficialRequest() = runBlocking {
         MockWebServer().use { server ->
             server.start()
             repeat(2) {
@@ -102,7 +105,7 @@ class DlsiteClientTest {
                 launch(Dispatchers.Default) {
                     DlsiteClient(OkHttpClient(), server.url("/")).work("RJ00000001")
                 }
-            repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            repeat(1) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
             withTimeout(2000) { job.cancelAndJoin() }
             assertTrue(job.isCancelled)
         }

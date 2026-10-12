@@ -18,6 +18,7 @@ import app.whisp.playback.PlaybackService
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.*
@@ -146,6 +147,7 @@ class AsmrOneIntegrationTest {
         val subtitle = "WEBVTT\n\n00:00.000 --> 00:39.000\n示例在线字幕\n".toByteArray()
         val leaks = AtomicInteger()
         val searches = AtomicInteger()
+        val failSearch = AtomicBoolean(false)
         val ranges = AtomicInteger()
         val revision = AtomicInteger(1)
         MockWebServer().use { server ->
@@ -165,6 +167,14 @@ class AsmrOneIntegrationTest {
                         if (request.headers["Authorization"] != null) leaks.incrementAndGet()
                         val path = request.url.encodedPath
                         val response = MockResponse.Builder()
+                        if (path == "/maniax/api/=/product.json") {
+                            val rj = request.url.queryParameter("workno")!!
+                            return response
+                                .body(
+                                    """[{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","creaters":{"voice_by":[{"name":"官方示例声优"}]},"image_main":{"url":"${server.url("/cover.png")}"}}]""",
+                                )
+                                .build()
+                        }
                         if (path == "/maniax/product/info/ajax") {
                             val rj = request.url.queryParameter("product_id")!!
                             return response
@@ -180,7 +190,10 @@ class AsmrOneIntegrationTest {
                                 )
                                 .build()
                         if (path == "/api/works" || path.startsWith("/api/search/")) {
-                            if (path.startsWith("/api/search/")) searches.incrementAndGet()
+                            if (path.startsWith("/api/search/")) {
+                                searches.incrementAndGet()
+                                if (failSearch.get()) return response.code(503).build()
+                            }
                             return response
                                 .body(
                                     """{"works":[${metadata(1)}],"pagination":{"totalCount":1}}""",
@@ -263,12 +276,47 @@ class AsmrOneIntegrationTest {
                     .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 bitmap.recycle()
             }
-            ui.onNodeWithContentDescription("搜索在线作品").performClick()
-            ui.onNodeWithTag("asmr-search").performTextInput("示例")
+            ui.onNodeWithTag("asmr-search").performTextInput("RJ00000001")
             ui.onNodeWithContentDescription("提交在线搜索").performClick()
+            ui.onNodeWithTag("asmr-results").assertExists()
+            assertEquals(0, searches.get())
+            ui.onNodeWithTag("asmr-search").performTextReplacement("示例")
+            ui.onNodeWithText("热门").performClick()
             waitFor { searches.get() > 0 }
-            runBlocking { repo.importAsmrWork(sourceId, 1, metadataClient) }
+            failSearch.set(true)
+            ui.onNodeWithContentDescription("刷新在线作品").performClick()
+            ui.waitUntil(15000) { ui.onAllNodesWithText("刷新失败").fetchSemanticsNodes().isNotEmpty() }
+            failSearch.set(false)
+            ui.onNodeWithText("重试").performClick()
+            ui.waitUntil(15000) { ui.onAllNodesWithText("刷新失败").fetchSemanticsNodes().isEmpty() }
+            val criteriaModel = main {
+                androidx.lifecycle
+                    .ViewModelProvider(ui.activity)[app.whisp.ui.AppViewModel::class.java]
+            }
+            assertEquals("示例", criteriaModel.asmrQuery.value?.text)
+            assertEquals("dl_count", criteriaModel.asmrQuery.value?.order)
+            ui.onNodeWithContentDescription("筛选作品").performClick()
+            ui.onNodeWithTag("asmr-facet-input").performTextInput("示例声优")
+            ui.onNodeWithText("应用").performClick()
+            waitFor {
+                criteriaModel.asmrQuery.value?.facets?.contains(AsmrFacet("va", "示例声优")) == true
+            }
+            ui.onNodeWithTag("asmr-results").assertExists()
+            val previewModel = main {
+                androidx.lifecycle
+                    .ViewModelProvider(ui.activity)[app.whisp.ui.AppViewModel::class.java]
+            }
+            val seed = runBlocking { repo.asmrWork(sourceId, 1) }
+            main { previewModel.prepareAsmrPreview(sourceId, seed, metadataClient) }
+            waitFor { previewModel.asmrPreview.value.preview != null }
+            ui.onNodeWithText("示例在线作品1").performClick()
+            ui.onNodeWithTag("asmr-preview").assertExists()
+            assertTrue(runBlocking { repo.dao.allWorks().isEmpty() })
+            ui.onNodeWithText("加入作品库").performClick()
             waitFor { repo.library.value.any { it.work.title == "官方示例作品1" } }
+            ui.onNodeWithContentDescription("返回检索").performClick()
+            ui.onNodeWithTag("asmr-search").assertTextContains("示例")
+            ui.onNodeWithTag("asmr-results").assertExists()
             ui.onNodeWithText("作品", useUnmergedTree = true).performClick()
             ui.onNodeWithContentDescription("官方示例作品1").performClick()
             ui.waitUntil(15000) { ui.onAllNodesWithText("播放作品").fetchSemanticsNodes().isNotEmpty() }

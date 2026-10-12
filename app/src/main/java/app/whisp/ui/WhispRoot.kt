@@ -423,9 +423,55 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                     AsmrOnePage(
                                                         model,
                                                         destination.id,
-                                                        { stack.removeAt(stack.lastIndex) },
-                                                        { push(Route("detail", it)) },
+                                                        {
+                                                            if (
+                                                                stack.lastOrNull() == destination &&
+                                                                    stack.size > 1
+                                                            )
+                                                                stack.removeAt(stack.lastIndex)
+                                                        },
+                                                        { work ->
+                                                            model.prepareAsmrPreview(
+                                                                destination.id,
+                                                                work,
+                                                            )
+                                                            push(
+                                                                Route(
+                                                                    "asmrpreview",
+                                                                    "${destination.id}|${work.id}",
+                                                                ),
+                                                            )
+                                                        },
                                                     )
+                                                "asmrpreview" -> {
+                                                    val sourceId =
+                                                        destination.id.substringBefore('|')
+                                                    val id =
+                                                        destination.id
+                                                            .substringAfter('|')
+                                                            .toLongOrNull()
+                                                    if (id != null)
+                                                        AsmrPreviewPage(
+                                                            model,
+                                                            sourceId,
+                                                            id,
+                                                            {
+                                                                if (
+                                                                    stack.lastOrNull() ==
+                                                                        destination
+                                                                )
+                                                                    stack.removeAt(stack.lastIndex)
+                                                            },
+                                                            { push(Route("player")) },
+                                                            {
+                                                                if (
+                                                                    stack.lastOrNull() ==
+                                                                        destination
+                                                                )
+                                                                    stack.removeAt(stack.lastIndex)
+                                                            },
+                                                        )
+                                                }
                                                 "storage" ->
                                                     StoragePage(model) {
                                                         stack.removeAt(stack.lastIndex)

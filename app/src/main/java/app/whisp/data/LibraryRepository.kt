@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.*
 import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -458,10 +459,84 @@ class LibraryRepository(val context: Context) {
         return id
     }
 
+    private val searchHistoryKey = stringPreferencesKey("asmr-search-history")
+    val asmrSearchHistory =
+        context.preferences.data
+            .map { prefs ->
+                runCatching {
+                        Json.parseToJsonElement(prefs[searchHistoryKey] ?: "[]")
+                            .jsonArray
+                            .map { it.jsonPrimitive.content }
+                            .take(20)
+                    }
+                    .getOrDefault(emptyList())
+            }
+            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    suspend fun rememberAsmrSearch(text: String) {
+        val clean = normalizedAsmrInput(text).take(300)
+        if (clean.isBlank()) return
+        context.preferences.edit { prefs ->
+            val previous = runCatching {
+                Json.parseToJsonElement(prefs[searchHistoryKey] ?: "[]").jsonArray.map {
+                    it.jsonPrimitive.content
+                }
+            }
+                .getOrDefault(emptyList())
+            prefs[searchHistoryKey] =
+                JsonArray((listOf(clean) + previous).distinct().take(20).map(::JsonPrimitive))
+                    .toString()
+        }
+    }
+
+    suspend fun clearAsmrSearchHistory() {
+        context.preferences.edit { it.remove(searchHistoryKey) }
+    }
+
     suspend fun asmrPage(query: AsmrQuery, page: Int): AsmrPage {
         val source = dao.source(query.sourceId) ?: error("来源已移除")
-        return asmrClient(source).catalog(page, query.text, query.order, query.subtitlesOnly)
+        val client = asmrClient(source)
+        val direct = asmrWorkNumber(query.text)
+        if (direct != null && query.facets.isEmpty() && !query.subtitlesOnly) {
+            if (page != 1) return AsmrPage(emptyList(), false)
+            return try {
+                val work = client.work(direct)
+                require(work.id == direct) { "作品编号不匹配" }
+                AsmrPage(listOf(work), false)
+            } catch (e: IOException) {
+                if ((e.cause as? OnlineHttpException)?.code == 404) AsmrPage(emptyList(), false)
+                else throw e
+            }
+        }
+        return client.catalog(page, query.serverText, query.order, query.subtitlesOnly)
     }
+
+    suspend fun asmrWork(sourceId: String, id: Long): AsmrWork =
+        asmrClient(dao.source(sourceId) ?: error("来源已移除")).work(id)
+
+    suspend fun previewAsmrWork(
+        sourceId: String,
+        id: Long,
+        metadataClient: DlsiteClient = dlsite,
+    ): AsmrPreview =
+        withContext(Dispatchers.IO) {
+            val source = dao.source(sourceId) ?: error("来源已移除")
+            val client = asmrClient(source)
+            val catalog = client.work(id)
+            require(catalog.id == id) { "作品编号不匹配" }
+            val work = metadataClient.work(catalog.rj).applyTo(catalog)
+            AsmrPreview(
+                sourceId,
+                catalog.artist,
+                work,
+                client.index(work, sourceId, System.currentTimeMillis()),
+            )
+        }
+
+    suspend fun addAsmrPreview(preview: AsmrPreview): String =
+        withContext(Dispatchers.IO) {
+            onlineWorkChanges.withLock { commitAsmrPreview(preview) }
+        }
 
     suspend fun importAsmrWork(
         sourceId: String,
@@ -474,75 +549,76 @@ class LibraryRepository(val context: Context) {
                 val source = dao.source(sourceId) ?: error("来源已移除")
                 if (existingOnly && dao.work(stableId("asmr.one|work|$id")) == null)
                     return@withLock stableId("asmr.one|work|$id")
-                val client = asmrClient(source)
-                val catalogWork = client.work(id)
-                require(catalogWork.id == id) { "作品编号不匹配" }
-                val work = metadataClient.work(catalogWork.rj).applyTo(catalogWork)
-                val generation = System.currentTimeMillis()
-                val indexed = client.index(work, sourceId, generation)
-                val previous = dao.work(work.workId)
-                if (previous?.offlineAttachments == true)
-                    work.coverId?.let { cover ->
-                        val target = File(offlineDir, cover)
-                        if (!target.isFile)
-                            atomicFile(target, client.bytes(work.coverUrl!!, 16 * 1024 * 1024))
-                    }
-                currentCoroutineContext().ensureActive()
-                database.withTransaction {
-                    val latestSource = dao.source(sourceId) ?: error("来源已移除")
-                    val old = dao.details(work.workId)
-                    val newWork = indexed.works.single()
-                    val savedWork =
-                        old?.work?.let {
-                            newWork.copy(
-                                title =
-                                    if (it.title != it.originalTitle) it.title else newWork.title,
-                                artist =
-                                    if (
-                                        it.artist !=
-                                            it.originalArtist.ifBlank { catalogWork.artist }
-                                    )
-                                        it.artist
-                                    else newWork.artist,
-                                favorite = it.favorite,
-                                coverId =
-                                    it.coverId?.takeIf { cover ->
-                                        cover == stableId("${it.id}|custom-cover")
-                                    } ?: newWork.coverId,
-                                addedAt = it.addedAt,
-                                offlineAttachments = it.offlineAttachments,
-                            )
-                        } ?: newWork
-                    val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
-                    val pinned =
-                        oldTracks.values
-                            .filter {
-                                downloadManager.downloadIndex.getDownload(it.id)?.state ==
-                                    Download.STATE_COMPLETED
-                            }
-                            .map { it.id }
-                    dao.deleteWorkSourceLocations(work.workId, sourceId)
-                    dao.putWorks(listOf(savedWork))
-                    dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
-                    if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
-                    dao.putTracks(
-                        indexed.tracks.map { track ->
-                            track.copy(
-                                durationMs =
-                                    track.durationMs.takeIf { it > 0 }
-                                        ?: oldTracks[track.id]?.durationMs
-                                        ?: 0,
-                            )
-                        },
-                    )
-                    dao.putAttachments(indexed.attachments)
-                    dao.putLocations(indexed.locations)
-                    dao.putSource(latestSource.copy(lastScan = generation, error = null))
-                }
-                storageChanged()
-                work.workId
+                require(source.kind == "asmrone") { "来源类型不匹配" }
+                commitAsmrPreview(previewAsmrWork(sourceId, id, metadataClient))
             }
         }
+
+    private suspend fun commitAsmrPreview(preview: AsmrPreview): String {
+        val sourceId = preview.sourceId
+        val work = preview.work
+        val indexed = preview.indexed
+        val generation = System.currentTimeMillis()
+        val source = dao.source(sourceId) ?: error("来源已移除")
+        val client = asmrClient(source)
+        val previous = dao.work(work.workId)
+        if (previous?.offlineAttachments == true)
+            work.coverId?.let { cover ->
+                val target = File(offlineDir, cover)
+                if (!target.isFile)
+                    atomicFile(target, client.bytes(work.coverUrl!!, 16 * 1024 * 1024))
+            }
+        currentCoroutineContext().ensureActive()
+        database.withTransaction {
+            val latestSource = dao.source(sourceId) ?: error("来源已移除")
+            val old = dao.details(work.workId)
+            val newWork = indexed.works.single()
+            val savedWork =
+                old?.work?.let {
+                    newWork.copy(
+                        title = if (it.title != it.originalTitle) it.title else newWork.title,
+                        artist =
+                            if (it.artist != it.originalArtist.ifBlank { preview.catalogArtist })
+                                it.artist
+                            else newWork.artist,
+                        favorite = it.favorite,
+                        coverId =
+                            it.coverId?.takeIf { cover ->
+                                cover == stableId("${it.id}|custom-cover")
+                            } ?: newWork.coverId,
+                        addedAt = it.addedAt,
+                        offlineAttachments = it.offlineAttachments,
+                    )
+                } ?: newWork
+            val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
+            val pinned =
+                oldTracks.values
+                    .filter {
+                        downloadManager.downloadIndex.getDownload(it.id)?.state ==
+                            Download.STATE_COMPLETED
+                    }
+                    .map { it.id }
+            dao.deleteWorkSourceLocations(work.workId, sourceId)
+            dao.putWorks(listOf(savedWork))
+            dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
+            if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
+            dao.putTracks(
+                indexed.tracks.map { track ->
+                    track.copy(
+                        durationMs =
+                            track.durationMs.takeIf { it > 0 }
+                                ?: oldTracks[track.id]?.durationMs
+                                ?: 0,
+                    )
+                },
+            )
+            dao.putAttachments(indexed.attachments)
+            dao.putLocations(indexed.locations)
+            dao.putSource(latestSource.copy(lastScan = generation, error = null))
+        }
+        storageChanged()
+        return work.workId
+    }
 
     suspend fun updateDlsiteMetadata(id: String, client: DlsiteClient = dlsite) =
         withContext(Dispatchers.IO) {

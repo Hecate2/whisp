@@ -7,6 +7,8 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.*
 
+internal class OnlineHttpException(val code: Int) : IOException("请求失败（$code）")
+
 internal suspend fun OkHttpClient.onlineBytes(request: Request, limit: Int): ByteArray =
     suspendCancellableCoroutine { continuation ->
         val call = newCall(request)
@@ -20,7 +22,7 @@ internal suspend fun OkHttpClient.onlineBytes(request: Request, limit: Int): Byt
                 override fun onResponse(call: Call, response: Response) {
                     try {
                         val bytes = response.use {
-                            if (!it.isSuccessful) throw IOException("请求失败（${it.code}）")
+                            if (!it.isSuccessful) throw OnlineHttpException(it.code)
                             boundedRead(it.body.byteStream(), limit)
                         }
                         if (continuation.isActive) continuation.resume(bytes)

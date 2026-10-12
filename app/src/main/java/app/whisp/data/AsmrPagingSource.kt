@@ -10,7 +10,17 @@ data class AsmrQuery(
     val text: String = "",
     val order: String = "create_date",
     val subtitlesOnly: Boolean = false,
-)
+    val facets: List<AsmrFacet> = emptyList(),
+) {
+    val searching
+        get() = text.isNotBlank() || facets.isNotEmpty() || subtitlesOnly
+
+    val serverText
+        get() =
+            (listOf(normalizedAsmrInput(text)) + facets.distinct().map { it.token })
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+}
 
 class AsmrPagingSource(
     private val loadPage: suspend (Int) -> AsmrPage,

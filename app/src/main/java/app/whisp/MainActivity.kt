@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -70,7 +71,9 @@ class MainActivity : ComponentActivity() {
         val model =
             ViewModelProvider(
                 this,
-                viewModelFactory { initializer { AppViewModel(repository) } },
+                viewModelFactory {
+                    initializer { AppViewModel(repository, createSavedStateHandle()) }
+                },
             )[AppViewModel::class.java]
         setContent { WhispRoot(model, playerRequest) }
         if (Build.VERSION.SDK_INT >= 33)
