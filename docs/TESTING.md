@@ -80,6 +80,16 @@ adb shell am instrument -w -e class app.whisp.PlaybackIntegrationTest app.whisp.
 
 WebDAV 测试在设备内启动带测试鉴权和 Range 的本机服务。网络配置为远程 WebDAV 使用 HTTPS，为 localhost 与 Android 模拟器测试地址提供 HTTP。运行 `LocalImportIntegrationTest` 可验证系统目录授权和持久读取权限；各测试使用独立的专用测试数据。
 
+## DLsite 真机连接诊断
+
+`DlsiteLiveIntegrationTest` 使用隔离测试包读取目标 RJ 作品的官方元数据。通过 `probeRj` 参数启用；常规测试套件将其跳过。设置本机环境变量 `WHISP_DLSITE_TEST_RJ` 后执行：
+
+```sh
+adb shell am instrument --user 0 -w -e class app.whisp.DlsiteLiveIntegrationTest -e probeRj "$WHISP_DLSITE_TEST_RJ" app.whisp.smoketest.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+诊断记录请求阶段、HTTP 状态、耗时和异常类型，作品内容保留在进程内存中。测试直接使用网络客户端，前台应用及作品库由用户继续操作。
+
 ## 提交前检查
 
 ```sh
