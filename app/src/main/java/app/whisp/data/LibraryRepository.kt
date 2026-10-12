@@ -524,12 +524,15 @@ class LibraryRepository(val context: Context) {
             val client = asmrClient(source)
             val catalog = client.work(id)
             require(catalog.id == id) { "作品编号不匹配" }
-            val work = metadataClient.work(catalog.rj).applyTo(catalog)
+            val official =
+                metadataClient.work(catalog.rj).withPrevious(readDlsiteDetails(catalog.workId))
+            val work = official.applyTo(catalog)
             AsmrPreview(
                 sourceId,
                 catalog.artist,
                 work,
                 client.index(work, sourceId, System.currentTimeMillis()),
+                official.details,
             )
         }
 
@@ -600,6 +603,12 @@ class LibraryRepository(val context: Context) {
                     .map { it.id }
             dao.deleteWorkSourceLocations(work.workId, sourceId)
             dao.putWorks(listOf(savedWork))
+            preview.metadata?.let { fresh ->
+                val previous = decodeDlsiteDetails(dao.dlsiteMetadata(work.workId)?.snapshot)
+                dao.putDlsiteMetadata(
+                    DlsiteMetadataEntity(work.workId, fresh.preserving(previous).encode()),
+                )
+            }
             dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
             if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
             dao.putTracks(
@@ -624,7 +633,8 @@ class LibraryRepository(val context: Context) {
         withContext(Dispatchers.IO) {
             onlineWorkChanges.withLock {
                 val old = dao.work(id) ?: error("作品已删除")
-                val metadata = client.work(old.rj ?: error("作品没有 RJ 编号"))
+                val metadata =
+                    client.work(old.rj ?: error("作品没有 RJ 编号")).withPrevious(readDlsiteDetails(id))
                 val coverId = stableId("$id|${metadata.coverPath}")
                 val coverUrl = metadata.coverUrl.toHttpUrlOrNull() ?: error("封面地址无效")
                 val bytes =
@@ -655,8 +665,58 @@ class LibraryRepository(val context: Context) {
                         ),
                     )
                 }
+                database.withTransaction {
+                    if (dao.work(id) != null) {
+                        val previous = decodeDlsiteDetails(dao.dlsiteMetadata(id)?.snapshot)
+                        dao.putDlsiteMetadata(
+                            DlsiteMetadataEntity(
+                                id,
+                                metadata.details.preserving(previous).encode(),
+                            ),
+                        )
+                    }
+                }
                 artworkRevision.update { it + 1 }
                 storageChanged()
+            }
+        }
+
+    fun dlsiteDetails(id: String): Flow<DlsiteDetails?> =
+        dao.observeDlsiteMetadata(id)
+            .map { decodeDlsiteDetails(it?.snapshot) }
+            .flowOn(Dispatchers.Default)
+
+    suspend fun readDlsiteDetails(id: String): DlsiteDetails? =
+        withContext(Dispatchers.Default) { decodeDlsiteDetails(dao.dlsiteMetadata(id)?.snapshot) }
+
+    suspend fun saveDlsiteDetails(id: String, details: DlsiteDetails) =
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val work = dao.work(id)
+                if (work != null && work.rj == details.rj) {
+                    val previous = decodeDlsiteDetails(dao.dlsiteMetadata(id)?.snapshot)
+                    dao.putDlsiteMetadata(
+                        DlsiteMetadataEntity(id, details.preserving(previous).encode()),
+                    )
+                }
+            }
+        }
+
+    suspend fun ensureDlsiteImage(id: String, url: String): File? =
+        imageRequest(id) {
+            imageLanes.withPermit {
+                artworkCache.get(id)
+                    ?: cacheArtwork(
+                            id,
+                            onlineHttp.onlineBytes(
+                                okhttp3.Request.Builder()
+                                    .url(url)
+                                    .header("Referer", "https://www.dlsite.com/")
+                                    .build(),
+                                16 * 1024 * 1024,
+                            ),
+                        )
+                        .also { artworkRevision.update { it + 1 } }
             }
         }
 

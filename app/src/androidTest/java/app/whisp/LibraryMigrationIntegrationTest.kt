@@ -77,7 +77,8 @@ class LibraryMigrationIntegrationTest {
                 assertTrue(cursor.moveToFirst())
                 assertEquals(1, cursor.getInt(0))
             }
-            assertEquals(2, database.openHelper.readableDatabase.version)
+            assertEquals(3, database.openHelper.readableDatabase.version)
+            assertNull(database.library().dlsiteMetadata("migration-work"))
         } finally {
             database.close()
         }

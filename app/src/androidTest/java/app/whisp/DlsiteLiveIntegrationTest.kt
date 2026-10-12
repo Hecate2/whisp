@@ -44,6 +44,16 @@ class DlsiteLiveIntegrationTest {
         try {
             val metadata = DlsiteClient(http).work(rj!!)
             assertTrue(metadata.title.isNotBlank())
+            if (InstrumentationRegistry.getArguments().getString("probeDetails") == "true") {
+                val client = DlsiteClient(http)
+                val statistics = client.statistics(rj)
+                val blocks = client.description(rj)
+                assertTrue(metadata.details.credits.isNotEmpty())
+                assertTrue(blocks.isNotEmpty())
+                println(
+                    "DLSITE_PROBE credits=${metadata.details.credits.size}; genres=${metadata.details.genres.size}; samples=${metadata.details.images.size}; blocks=${blocks.size}; rating=${statistics.rating}",
+                )
+            }
             if (InstrumentationRegistry.getArguments().getString("probeAsmr") == "true") {
                 val client = AsmrOneClient(http)
                 val catalog = client.work(rj.drop(2).toLong())

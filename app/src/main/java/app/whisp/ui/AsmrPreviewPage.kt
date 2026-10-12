@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -40,6 +41,19 @@ internal fun AsmrPreviewPage(
     val current = state.takeIf { it.sourceId == sourceId && it.seed?.id == id }
     val work = current?.preview?.work ?: current?.seed
     val preview = current?.preview
+    var tab by rememberSaveable(id) { mutableStateOf("曲目") }
+    val official =
+        rememberDlsiteWork(
+            model,
+            work?.workId.orEmpty(),
+            preview?.metadata?.rj,
+            tab,
+            preview?.metadata,
+        )
+    val filter: (AsmrFacet) -> Unit = { facet ->
+        model.submitAsmrQuery(AsmrQuery(sourceId, facets = listOf(facet)))
+        search()
+    }
     var saving by remember(id) { mutableStateOf(false) }
     var saveError by remember(id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -154,48 +168,46 @@ internal fun AsmrPreviewPage(
                         }
                     }
                 }
-            if (work?.facets?.isNotEmpty() == true)
-                LazyFacetRow(work.facets) { facet ->
-                    model.submitAsmrQuery(AsmrQuery(sourceId, facets = listOf(facet)))
-                    search()
-                }
+            if (preview != null) {
+                OfficialCircle(official.details ?: preview.metadata, filter)
+                WorkContentTabs(tab) { tab = it }
+            }
         }
-        preview?.details?.let { detail ->
-            TrackSections.groups(detail.tracks).forEach { section ->
-                if (TrackSections.groups(detail.tracks).size > 1)
-                    item {
-                        Text(
-                            section.title,
-                            Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                            color = Rose,
-                            fontSize = 18.sp,
-                        )
-                    }
-                items(section.tracks, key = { it.id }) { track ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickable(enabled = !saving) { save(track.id, true) }
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(track.title, Modifier.weight(1f), fontSize = 16.sp)
-                        Icon(Icons.Filled.PlayArrow, "播放${track.title}", tint = Rose)
+        if (tab != "曲目")
+            dlsiteContent(
+                tab,
+                official,
+                model,
+                work?.workId.orEmpty(),
+                preview?.metadata?.rj,
+                preview?.metadata,
+                filter,
+            )
+        if (tab == "曲目")
+            preview?.details?.let { detail ->
+                TrackSections.groups(detail.tracks).forEach { section ->
+                    if (TrackSections.groups(detail.tracks).size > 1)
+                        item {
+                            Text(
+                                section.title,
+                                Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                                color = Rose,
+                                fontSize = 18.sp,
+                            )
+                        }
+                    items(section.tracks, key = { it.id }) { track ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable(enabled = !saving) { save(track.id, true) }
+                                .padding(horizontal = 24.dp, vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(track.title, Modifier.weight(1f), fontSize = 16.sp)
+                            Icon(Icons.Filled.PlayArrow, "播放${track.title}", tint = Rose)
+                        }
                     }
                 }
             }
-        }
         item { Spacer(Modifier.height(24.dp)) }
-    }
-}
-
-@Composable
-private fun LazyFacetRow(facets: List<AsmrFacet>, click: (AsmrFacet) -> Unit) {
-    androidx.compose.foundation.lazy.LazyRow(
-        contentPadding = PaddingValues(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(facets) { facet ->
-            SuggestionChip(onClick = { click(facet) }, label = { Text(facet.name) })
-        }
     }
 }

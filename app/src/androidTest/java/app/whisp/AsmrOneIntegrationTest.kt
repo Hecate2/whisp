@@ -55,6 +55,16 @@ class AsmrOneIntegrationTest {
         fail("Condition timed out: ${diagnostics()}")
     }
 
+    private fun capture(name: String) {
+        val repo = (ui.activity.application as WhispApp).repository
+        instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+            File(repo.context.getExternalFilesDir(null), name).outputStream().use {
+                image.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            image.recycle()
+        }
+    }
+
     @Test
     fun deletionCancelsAnAttachmentWorkerBeforeWaitingForItsLock() {
         val repo = (ui.activity.application as WhispApp).repository
@@ -171,7 +181,7 @@ class AsmrOneIntegrationTest {
                             val rj = request.url.queryParameter("workno")!!
                             return response
                                 .body(
-                                    """[{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","creaters":{"voice_by":[{"name":"官方示例声优"}]},"image_main":{"url":"${server.url("/cover.png")}"}}]""",
+                                    """[{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","regist_date":"2026-01-02 00:00:00","series_name":"官方示例系列","genres":[{"id":1,"name":"官方示例标签"}],"creaters":{"scenario_by":[{"name":"官方示例剧本"}],"illust_by":[{"name":"官方示例插画"}],"voice_by":[{"name":"官方示例声优"}]},"image_main":{"url":"${server.url("/cover.png")}"}}]""",
                                 )
                                 .build()
                         }
@@ -179,14 +189,14 @@ class AsmrOneIntegrationTest {
                             val rj = request.url.queryParameter("product_id")!!
                             return response
                                 .body(
-                                    """{"$rj":{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","work_image":"${server.url("/cover.png")}"}}""",
+                                    """{"$rj":{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","work_image":"${server.url("/cover.png")}","rate_average_2dp":4.88,"rate_average_star":50,"rate_count":185}}""",
                                 )
                                 .build()
                         }
                         if (path.startsWith("/maniax/work/"))
                             return response
                                 .body(
-                                    """<h1 id="work_name">官方示例作品</h1><table id="work_outline"><tr><th>声優</th><td><a>官方示例声优</a></td></tr></table>""",
+                                    """<h1 id="work_name">官方示例作品</h1><div class="work_parts_container"><h3 class="work_parts_heading">官方介绍标题</h3><p>官方介绍段落</p><img src="${server.url("/cover.png")}"></div><table id="work_outline"><tr><th>声優</th><td><a>官方示例声优</a></td></tr></table>""",
                                 )
                                 .build()
                         if (path == "/api/works" || path.startsWith("/api/search/")) {
@@ -312,9 +322,53 @@ class AsmrOneIntegrationTest {
             ui.onNodeWithText("示例在线作品1").performClick()
             ui.onNodeWithTag("asmr-preview").assertExists()
             assertTrue(runBlocking { repo.dao.allWorks().isEmpty() })
+            val workKey = seed.workId
+            val seedDetails = previewModel.asmrPreview.value.preview!!.metadata!!
+            main {
+                previewModel.loadDlsiteDetails(
+                    workKey,
+                    seed.rj,
+                    "description",
+                    seedDetails,
+                    client = metadataClient,
+                )
+                previewModel.loadDlsiteDetails(
+                    workKey,
+                    seed.rj,
+                    "statistics",
+                    seedDetails,
+                    client = metadataClient,
+                )
+            }
+            waitFor {
+                previewModel.dlsiteStates.value[workKey]?.details?.description?.isNotEmpty() ==
+                    true &&
+                    previewModel.dlsiteStates.value[workKey]?.details?.statistics?.rating == 4.88
+            }
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("介绍", substring = false))
+            ui.onNodeWithText("介绍").performClick()
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("官方介绍标题"))
+            ui.onNodeWithText("官方介绍标题").assertIsDisplayed()
+            capture("dlsite-introduction.png")
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("资料", substring = false))
+            ui.onNodeWithText("资料").performClick()
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("官方示例剧本"))
+            ui.onNodeWithText("官方示例剧本").assertIsDisplayed()
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("4.88"))
+            ui.onNodeWithText("4.88").assertIsDisplayed()
+            capture("dlsite-information.png")
+            assertTrue(runBlocking { repo.dao.allWorks().isEmpty() })
+            ui.onNodeWithTag("asmr-preview").performScrollToNode(hasText("加入作品库"))
             ui.onNodeWithText("加入作品库").performClick()
+            waitFor {
+                runBlocking { repo.readDlsiteDetails(workKey)?.description?.isNotEmpty() == true }
+            }
             waitFor { repo.library.value.any { it.work.title == "官方示例作品1" } }
+            ui.onNodeWithTag("asmr-preview").performScrollToIndex(0)
             ui.onNodeWithContentDescription("返回检索").performClick()
+            ui.waitUntil(10000) {
+                ui.onAllNodesWithTag("asmr-search").fetchSemanticsNodes().isNotEmpty()
+            }
             ui.onNodeWithTag("asmr-search").assertTextContains("示例")
             ui.onNodeWithTag("asmr-results").assertExists()
             ui.onNodeWithText("作品", useUnmergedTree = true).performClick()
@@ -431,6 +485,7 @@ class AsmrOneIntegrationTest {
                     repo.savePlaybackProgress(ProgressEntity(workId, track.id, 1000))
                     repo.flushPlaybackProgress()
                     assertNull(repo.dao.progress(workId))
+                    assertNull(repo.dao.dlsiteMetadata(workId))
                     assertTrue(repo.bookmarks.value.none { it.workId == workId })
                     detail.tracks.forEach { assertTrue(repo.dao.locations(it.id).isEmpty()) }
                     assertNotNull(repo.dao.work(stableId("asmr.one|work|2")))

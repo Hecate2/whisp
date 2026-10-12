@@ -21,6 +21,12 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
+data class DlsiteUiState(
+    val details: DlsiteDetails? = null,
+    val loading: Set<String> = emptySet(),
+    val errors: Map<String, String> = emptyMap(),
+)
+
 data class AsmrPreviewState(
     val sourceId: String = "",
     val seed: AsmrWork? = null,
@@ -109,7 +115,11 @@ class AppViewModel(
     }
 
     suspend fun saveAsmrPreview(preview: AsmrPreview): WorkDetails {
-        repository.addAsmrPreview(preview)
+        repository.addAsmrPreview(
+            preview.copy(
+                metadata = dlsiteStates.value[preview.work.workId]?.details ?: preview.metadata,
+            ),
+        )
         return repository.dao.details(preview.work.workId) ?: error("作品保存失败")
     }
 
@@ -141,6 +151,90 @@ class AppViewModel(
                     .flow
             }
             .cachedIn(viewModelScope)
+    val dlsiteStates = MutableStateFlow<Map<String, DlsiteUiState>>(emptyMap())
+    private val dlsiteJobs = mutableMapOf<String, Job>()
+
+    fun acceptDlsiteDetails(id: String, details: DlsiteDetails) {
+        dlsiteStates.update { previous ->
+            val state = previous[id] ?: return@update previous
+            previous + (id to state.copy(details = details.preserving(state.details)))
+        }
+    }
+
+    fun loadDlsiteDetails(
+        workId: String,
+        rj: String,
+        part: String = "product",
+        seed: DlsiteDetails? = null,
+        force: Boolean = false,
+        client: DlsiteClient = repository.dlsite,
+    ) {
+        require(part in setOf("product", "description", "statistics"))
+        val key = "$workId|$part"
+        if (dlsiteJobs[key]?.isActive == true) return
+        fun update(block: (DlsiteUiState) -> DlsiteUiState) {
+            dlsiteStates.update { states ->
+                val next = LinkedHashMap(states)
+                next[workId] = block(states[workId] ?: DlsiteUiState())
+                while (next.size > 12) next.remove(next.keys.first())
+                next
+            }
+        }
+        if (dlsiteJobs.size >= 6) dlsiteJobs.remove(dlsiteJobs.keys.first())?.cancel()
+        val job = viewModelScope.launch {
+            val cached =
+                dlsiteStates.value[workId]?.details ?: seed ?: repository.readDlsiteDetails(workId)
+            if (cached != null) update { it.copy(details = cached.preserving(it.details)) }
+            val now = System.currentTimeMillis()
+            val ready =
+                when (part) {
+                    "product" ->
+                        cached?.completeProduct == true &&
+                            now - cached.productFetchedAt < 7 * 24 * 60 * 60 * 1000L
+                    "description" -> cached != null && cached.descriptionFetchedAt > 0
+                    else ->
+                        cached?.statistics?.let { now - it.fetchedAt < 24 * 60 * 60 * 1000L } ==
+                            true
+                }
+            if (ready && !force) {
+                dlsiteJobs.remove(key)
+                return@launch
+            }
+            update { it.copy(loading = it.loading + part, errors = it.errors - part) }
+            try {
+                val fresh =
+                    when (part) {
+                        "product" -> client.work(rj).details
+                        "description" -> {
+                            val blocks = client.description(rj)
+                            (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
+                                description = blocks,
+                                descriptionFetchedAt = System.currentTimeMillis(),
+                            )
+                        }
+                        else -> {
+                            val statistics = client.statistics(rj)
+                            (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
+                                statistics = statistics,
+                            )
+                        }
+                    }
+                val merged = fresh.preserving(dlsiteStates.value[workId]?.details)
+                repository.saveDlsiteDetails(workId, merged)
+                update { it.copy(details = merged.preserving(it.details)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                update { it.copy(errors = it.errors + (part to (e.message ?: "DLsite 读取失败"))) }
+            } finally {
+                update { it.copy(loading = it.loading - part) }
+                dlsiteJobs.remove(key)
+            }
+        }
+        dlsiteJobs[key] = job
+        job.invokeOnCompletion { if (dlsiteJobs[key] === job) dlsiteJobs.remove(key) }
+    }
+
     // Event snapshots never advance merely because playback time passes.
     val player = MutableStateFlow(PlaybackState())
     val position = MutableStateFlow(0L)

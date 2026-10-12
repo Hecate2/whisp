@@ -88,7 +88,7 @@ WebDAV 测试在设备内启动带测试鉴权和 Range 的本机服务。网络
 adb shell am instrument --user 0 -w -e class app.whisp.DlsiteLiveIntegrationTest -e probeRj "$WHISP_DLSITE_TEST_RJ" app.whisp.smoketest.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-添加 `-e probeAsmr true` 可同时验证在线作品信息、曲目索引与字幕关联。诊断记录请求阶段、HTTP 状态、耗时和异常类型，作品内容保留在进程内存中。测试直接使用网络客户端，前台应用及作品库由用户继续操作。
+添加 `-e probeDetails true` 验证创作者、标签、介绍、图片与精确评分。添加 `-e probeAsmr true` 可同时验证在线作品信息、曲目索引与字幕关联。诊断记录请求阶段、HTTP 状态、耗时和异常类型，作品内容保留在进程内存中。测试直接使用网络客户端，前台应用及作品库由用户继续操作。
 
 ## 提交前检查
 

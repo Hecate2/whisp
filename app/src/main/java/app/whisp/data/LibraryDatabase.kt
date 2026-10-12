@@ -32,6 +32,20 @@ data class WorkEntity(
     @ColumnInfo(defaultValue = "NULL") val coverUrl: String? = null,
 )
 
+@Entity(
+    tableName = "dlsite_metadata",
+    foreignKeys =
+        [
+            ForeignKey(
+                entity = WorkEntity::class,
+                parentColumns = ["id"],
+                childColumns = ["workId"],
+                onDelete = ForeignKey.CASCADE,
+            ),
+        ],
+)
+data class DlsiteMetadataEntity(@PrimaryKey val workId: String, val snapshot: String)
+
 @Entity(tableName = "tracks", indices = [Index("workId")])
 data class TrackEntity(
     @PrimaryKey val id: String,
@@ -93,6 +107,14 @@ data class WorkDetails(
 
 @Dao
 interface LibraryDao {
+    @Query("SELECT * FROM dlsite_metadata WHERE workId = :id")
+    fun observeDlsiteMetadata(id: String): Flow<DlsiteMetadataEntity?>
+
+    @Query("SELECT * FROM dlsite_metadata WHERE workId = :id")
+    suspend fun dlsiteMetadata(id: String): DlsiteMetadataEntity?
+
+    @Upsert suspend fun putDlsiteMetadata(value: DlsiteMetadataEntity)
+
     @Query("SELECT * FROM sources ORDER BY name") fun observeSources(): Flow<List<SourceEntity>>
 
     @Query("SELECT * FROM sources") suspend fun sources(): List<SourceEntity>
@@ -213,9 +235,10 @@ interface LibraryDao {
             LocationEntity::class,
             ProgressEntity::class,
             BookmarkEntity::class,
+            DlsiteMetadataEntity::class,
         ],
-    version = 2,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    version = 3,
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
     exportSchema = true,
 )
 abstract class LibraryDatabase : RoomDatabase() {

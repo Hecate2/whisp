@@ -74,15 +74,17 @@ internal fun Artwork(
     sharedKey: String? = null,
     catalogUrl: String? = null,
     catalogSourceId: String? = null,
+    officialUrl: String? = null,
 ) {
     val revision by model.repository.artworkRevision.collectAsStateWithLifecycle()
     val reload by model.repository.artworkReload.collectAsStateWithLifecycle()
     val file = remember(id, revision) { model.repository.artwork(id) }
-    LaunchedEffect(id, reload, file == null, catalogUrl, catalogSourceId) {
+    LaunchedEffect(id, reload, file == null, catalogUrl, catalogSourceId, officialUrl) {
         if (file == null)
             id?.let {
                 try {
-                    if (catalogUrl != null && catalogSourceId != null)
+                    if (officialUrl != null) model.repository.ensureDlsiteImage(it, officialUrl)
+                    else if (catalogUrl != null && catalogSourceId != null)
                         model.repository.ensureCatalogArtwork(it, catalogUrl, catalogSourceId)
                     else model.repository.ensureArtwork(it)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -162,6 +164,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
     val settings by model.settings.collectAsStateWithLifecycle()
     WhispTheme(reduceMotion = settings.reduceMotion) {
         val library by model.library.collectAsStateWithLifecycle()
+        val sources by model.sources.collectAsStateWithLifecycle()
         val state by model.player.collectAsStateWithLifecycle()
         val progress by model.progress.collectAsStateWithLifecycle()
         val opening by model.openingTrackId.collectAsStateWithLifecycle()
@@ -400,6 +403,27 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                                     stack.removeAt(stack.lastIndex)
                                                             },
                                                             { push(Route("player")) },
+                                                            sources
+                                                                .firstOrNull { source ->
+                                                                    source.kind == "asmrone"
+                                                                }
+                                                                ?.let { source ->
+                                                                    { facet: AsmrFacet ->
+                                                                        model.submitAsmrQuery(
+                                                                            AsmrQuery(
+                                                                                source.id,
+                                                                                facets =
+                                                                                    listOf(facet),
+                                                                            ),
+                                                                        )
+                                                                        push(
+                                                                            Route(
+                                                                                "asmrone",
+                                                                                source.id,
+                                                                            ),
+                                                                        )
+                                                                    }
+                                                                },
                                                         )
                                                     }
                                                 "player" ->
@@ -776,8 +800,10 @@ private fun DetailPage(
     model: AppViewModel,
     back: () -> Unit,
     player: () -> Unit,
+    filter: ((AsmrFacet) -> Unit)? = null,
 ) {
     var tab by rememberSaveable(detail.work.id) { mutableStateOf("曲目") }
+    val official = rememberDlsiteWork(model, detail.work.id, detail.work.rj, tab)
     var information by remember { mutableStateOf(false) }
     var attachment by remember { mutableStateOf<AttachmentEntity?>(null) }
     val playback by model.player.collectAsStateWithLifecycle()
@@ -846,7 +872,7 @@ private fun DetailPage(
                         .padding(horizontal = 24.dp, vertical = 18.dp),
                 ) {
                     Text(
-                        shortTitle(detail.work.title),
+                        detail.work.title,
                         fontFamily = FontFamily.Serif,
                         fontSize = 32.sp,
                         lineHeight = 40.sp,
@@ -882,19 +908,8 @@ private fun DetailPage(
                     player()
                 }
             }
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                listOf("曲目", "台本", "附赠").forEach { item ->
-                    TextButton(
-                        onClick = { tab = item },
-                        colors =
-                            ButtonDefaults.textButtonColors(
-                                contentColor = if (tab == item) Rose else Muted,
-                            ),
-                    ) {
-                        Text(item, fontSize = 16.sp)
-                    }
-                }
-            }
+            OfficialCircle(official.details, filter)
+            WorkContentTabs(tab) { tab = it }
         }
         when (tab) {
             "曲目" ->
@@ -929,28 +944,49 @@ private fun DetailPage(
                         }
                     }
                 }
-            "台本" ->
-                items(
-                    detail.attachments.filter { it.kind == "script" }.sortedBy { it.relativePath },
-                    key = { it.id },
-                ) {
-                    ResourceRow(it.title, Icons.Outlined.Description) { attachment = it }
-                }
-            else ->
-                items(
-                    detail.attachments
-                        .filter { it.kind !in setOf("script", "subtitle", "cover") }
-                        .sortedBy { it.relativePath },
-                    key = { it.id },
-                ) {
-                    ResourceRow(
-                        it.title,
-                        if (it.kind == "image") Icons.Outlined.Image
-                        else Icons.AutoMirrored.Outlined.InsertDriveFile,
-                    ) {
-                        attachment = it
+            else -> {
+                dlsiteContent(tab, official, model, detail.work.id, detail.work.rj, filter = filter)
+                if (tab == "资料") {
+                    val scripts =
+                        detail.attachments
+                            .filter { it.kind == "script" }
+                            .sortedBy { it.relativePath }
+                    val extras =
+                        detail.attachments
+                            .filter { it.kind !in setOf("script", "subtitle", "cover") }
+                            .sortedBy { it.relativePath }
+                    if (scripts.isNotEmpty())
+                        item {
+                            Text(
+                                "台本",
+                                Modifier.padding(24.dp),
+                                fontSize = 22.sp,
+                                fontFamily = FontFamily.Serif,
+                            )
+                        }
+                    items(scripts, key = { it.id }) {
+                        ResourceRow(it.title, Icons.Outlined.Description) { attachment = it }
+                    }
+                    if (extras.isNotEmpty())
+                        item {
+                            Text(
+                                "附赠",
+                                Modifier.padding(24.dp),
+                                fontSize = 22.sp,
+                                fontFamily = FontFamily.Serif,
+                            )
+                        }
+                    items(extras, key = { it.id }) {
+                        ResourceRow(
+                            it.title,
+                            if (it.kind == "image") Icons.Outlined.Image
+                            else Icons.AutoMirrored.Outlined.InsertDriveFile,
+                        ) {
+                            attachment = it
+                        }
                     }
                 }
+            }
         }
         item { Spacer(Modifier.height(24.dp)) }
     }

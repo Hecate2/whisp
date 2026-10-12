@@ -88,6 +88,7 @@ data class AsmrPreview(
     val catalogArtist: String,
     val work: AsmrWork,
     val indexed: IndexedLibrary,
+    val metadata: DlsiteDetails? = null,
 ) {
     val details
         get() = WorkDetails(indexed.works.single(), indexed.tracks, indexed.attachments)
