@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 plugins {
-    id("com.android.application") version "9.0.1" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
-    id("com.google.devtools.ksp") version "2.3.9" apply false
+    id("com.android.application") version "9.4.1" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
+    id("com.google.devtools.ksp") version "2.3.12" apply false
     id("com.diffplug.spotless") version "8.10.4"
 }
 
@@ -30,12 +30,14 @@ spotless {
     }
 }
 
+val blackExecutable = providers.environmentVariable("WHISP_BLACK").orElse("black")
+
 tasks.register<Exec>("pythonFormat") {
-    commandLine("black", "tools")
+    commandLine(blackExecutable.get(), "--required-version", "26.10.1", "tools")
 }
 
 tasks.register<Exec>("pythonFormatCheck") {
-    commandLine("black", "--check", "tools")
+    commandLine(blackExecutable.get(), "--required-version", "26.10.1", "--check", "tools")
 }
 
 tasks.register<Exec>("publicContentCheck") {

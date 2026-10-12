@@ -2,8 +2,8 @@
 package app.whisp.data
 
 import android.content.Context
-import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.core.net.toUri
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.time.ZonedDateTime
@@ -24,7 +24,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class LocalDirectory(private val context: Context) {
     suspend fun walk(root: String): List<FileEntry> =
         withContext(Dispatchers.IO) {
-            val tree = Uri.parse(root)
+            val tree = root.toUri()
             val rootId = DocumentsContract.getTreeDocumentId(tree)
             val files = mutableListOf<FileEntry>()
             val pending = ArrayDeque<Pair<String, String>>()
@@ -184,9 +184,7 @@ class WebDavClient(private val http: OkHttpClient) {
                 .build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("目录访问失败（${response.code}）")
-            val bytes =
-                response.body?.byteStream()?.use { boundedRead(it, 8 * 1024 * 1024) }
-                    ?: throw IOException("空响应")
+            val bytes = response.body.byteStream().use { boundedRead(it, 8 * 1024 * 1024) }
             return parse(bytes, url)
         }
     }
@@ -245,7 +243,7 @@ class WebDavClient(private val http: OkHttpClient) {
         val request = authorize(Request.Builder().url(url), source, password).build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("文件读取失败（${response.code}）")
-            val stream = response.body?.byteStream() ?: throw IOException("空文件")
+            val stream = response.body.byteStream()
             return boundedRead(stream, limit)
         }
     }
@@ -274,7 +272,7 @@ class WebDavClient(private val http: OkHttpClient) {
                 require(response.header("Content-Range")?.startsWith("bytes $offset-") == true) {
                     "分段响应不正确"
                 }
-            val stream = response.body?.byteStream() ?: error("空文件")
+            val stream = response.body.byteStream()
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(minOf(8192, length))
             while (output.size() < length) {

@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.*
@@ -36,7 +38,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.whisp.data.*
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlayerPage(
     detail: WorkDetails?,
@@ -73,7 +74,7 @@ internal fun PlayerPage(
     val shownTrack = track?.takeIf { it.id == state.trackId && opening == null }
     if (detail == null || track == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            IconAction(Icons.Outlined.ArrowBack, "返回", action = back)
+            IconAction(Icons.AutoMirrored.Outlined.ArrowBack, "返回", action = back)
         }
         return
     }
@@ -257,7 +258,7 @@ internal fun PlayerPage(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconAction(Icons.Outlined.QueueMusic, "播放队列", Muted) { queue = true }
+                IconAction(Icons.AutoMirrored.Outlined.QueueMusic, "播放队列", Muted) { queue = true }
                 IconAction(
                     Icons.Outlined.Bookmarks,
                     "片段",
@@ -546,10 +547,15 @@ internal fun PlayerPage(
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(clock(target), fontSize = 28.sp, color = Rose)
+                    val sliderState =
+                        rememberSliderState(
+                            value = target.toFloat(),
+                            trackRange = start.toFloat()..end.toFloat(),
+                        )
+                    sliderState.value = target.toFloat()
                     Slider(
-                        target.toFloat(),
-                        { target = it.toLong() },
-                        valueRange = start.toFloat()..end.toFloat(),
+                        state = sliderState,
+                        onValueChange = { target = it.toLong() },
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         OutlinedButton(
@@ -588,11 +594,18 @@ internal fun PlayerPage(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text("字幕字号")
+                    val sliderState =
+                        rememberSliderState(
+                            value = settings.subtitleSize.toFloat(),
+                            trackRange = 16f..30f,
+                            steps = 13,
+                        )
+                    sliderState.value = settings.subtitleSize.toFloat()
                     Slider(
-                        settings.subtitleSize.toFloat(),
-                        { model.action { model.repository.setSettings(size = it.roundToInt()) } },
-                        valueRange = 16f..30f,
-                        steps = 13,
+                        state = sliderState,
+                        onValueChange = {
+                            model.action { model.repository.setSettings(size = it.roundToInt()) }
+                        },
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("字幕偏移")

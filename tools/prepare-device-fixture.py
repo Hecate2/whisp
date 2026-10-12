@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Generate silent audio and neutral artwork without reading a personal library."""
+
 import argparse
 from pathlib import Path
 import shutil

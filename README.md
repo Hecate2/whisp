@@ -37,9 +37,9 @@ Whisp 是面向本地文件和 NAS 的 Android 音频播放器，适合音声、
 
 ## 构建
 
-项目使用 Kotlin、Jetpack Compose、Navigation 3、Media3、Room、DataStore、WorkManager、Coil、OkHttp 和 SMBJ。依赖版本固定在 Gradle 配置中；Material 3 使用 `1.5.0-alpha06` 的公开 MotionScheme API。
+项目使用 Kotlin、Jetpack Compose、Navigation 3、Media3、Room、DataStore、WorkManager、Coil、OkHttp 和 SMBJ。依赖版本固定在 Gradle 配置中；Material 3 使用 `1.5.0-beta01` 的公开 MotionScheme API。
 
-构建环境为 JDK 21、Android SDK Platform 36、Build Tools 36.0.0。Gradle Wrapper 固定为 9.1.0。SDK 路径通过 Android Studio、`ANDROID_HOME` 或本机的 `local.properties` 配置。
+构建环境为 JDK 21、Android SDK Platform 37、Build Tools 36.0.0。Gradle Wrapper 固定为 9.8.1。SDK 路径通过 Android Studio、`ANDROID_HOME` 或本机的 `local.properties` 配置。
 
 Debian 上可通过 apt 安装基础工具：
 
@@ -57,6 +57,8 @@ Android SDK 需自行安装相应平台。Debug APK 位于 `app/build/outputs/ap
 Release 启用 R8 与资源裁剪，默认产物为待签名 APK。签名配置位于本机的 `.signing/signing.properties`，字段为 `storeFile`、`storePassword`、`keyAlias` 和 `keyPassword`，其中 `storeFile` 相对 `.signing/`。配置完成后构建会生成已签名 APK；签名目录由本机管理，并由 Git 排除。
 
 ## 测试与公开内容检查
+
+工程检查通过 `./gradlew fmt` 和 `./gradlew qualityCheck` 执行，具体工具与实现分工见 [工程质量](docs/QUALITY.md)。
 
 单元测试使用合成目录、示例名称、生成的字节和本机模拟服务。真实 Samba 合同测试使用专用测试共享，设备集成测试使用生成样本和隔离测试包。具体步骤见 [测试说明](docs/TESTING.md)。
 

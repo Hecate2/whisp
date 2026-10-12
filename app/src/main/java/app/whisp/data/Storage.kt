@@ -4,15 +4,17 @@ package app.whisp.data
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import androidx.core.graphics.scale
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheEvictor
 import androidx.media3.datasource.cache.CacheSpan
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.TreeSet
-import java.util.UUID
 
 const val MIB = 1024L * 1024
 
@@ -67,13 +69,14 @@ internal class AdjustableCacheEvictor(
 }
 
 internal fun atomicFile(file: File, bytes: ByteArray) {
-    file.parentFile?.mkdirs()
-    val temp = File(file.parentFile, file.name + ".${UUID.randomUUID()}.tmp")
+    val parent = file.absoluteFile.parentFile!!
+    Files.createDirectories(parent.toPath())
+    val temp = Files.createTempFile(parent.toPath(), file.name + ".", ".tmp")
     try {
-        temp.writeBytes(bytes)
-        if (!temp.renameTo(file)) throw IOException("无法保存文件")
+        Files.write(temp, bytes)
+        Files.move(temp, file.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
     } finally {
-        temp.delete()
+        Files.deleteIfExists(temp)
     }
 }
 
@@ -154,8 +157,8 @@ internal object ImageOptimizer {
             val ratio = minOf(1f, longEdge.toFloat() / maxOf(decoded.width, decoded.height))
             val bitmap =
                 if (ratio < 1f)
-                    Bitmap.createScaledBitmap(
-                            decoded,
+                    decoded
+                        .scale(
                             (decoded.width * ratio).toInt().coerceAtLeast(1),
                             (decoded.height * ratio).toInt().coerceAtLeast(1),
                             true,
@@ -186,7 +189,4 @@ data class StorageUsage(
 ) {
     val cache
         get() = artwork + previews + streaming
-
-    val total
-        get() = cache + offline + customArtwork + library
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
-import java.security.MessageDigest
+import okio.ByteString.Companion.encodeUtf8
 
 data class FileEntry(
     val path: String,
@@ -18,17 +18,7 @@ data class IndexedLibrary(
     val locations: List<LocationEntity>,
 )
 
-fun stableId(value: String): String {
-    val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
-    val hex = "0123456789abcdef"
-    return buildString(32) {
-        for (i in 0 until 16) {
-            val byte = bytes[i].toInt() and 255
-            append(hex[byte ushr 4])
-            append(hex[byte and 15])
-        }
-    }
-}
+fun stableId(value: String): String = value.encodeUtf8().sha256().substring(0, 16).hex()
 
 object LibraryIndexer {
     private val rjPattern = Regex("RJ\\d{6,}", RegexOption.IGNORE_CASE)

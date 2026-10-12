@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.extractor.text.SubtitleParser
+import androidx.media3.extractor.text.webvtt.WebvttParser
+
 data class Cue(val startMs: Long, val endMs: Long, val text: String)
 
+@androidx.annotation.OptIn(UnstableApi::class)
 object SubtitleTimeline {
     private fun time(value: String): Long {
         val parts = value.trim().replace(',', '.').split(':')
@@ -17,32 +22,15 @@ object SubtitleTimeline {
         if (extension.lowercase() == "lrc") lrc(content) else vtt(content)
 
     fun vtt(content: String): List<Cue> {
-        val clean = content.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
+        if (content.isBlank()) return emptyList()
+        val bytes = content.removePrefix("\uFEFF").toByteArray(Charsets.UTF_8)
         val result = mutableListOf<Cue>()
-        val lines = clean.lines()
-        var index = 0
-        while (index < lines.size) {
-            val line = lines[index++]
-            if ("-->" !in line) continue
-            val times = line.split("-->", limit = 2)
-            val start = runCatching { time(times[0]) }.getOrNull() ?: continue
-            val end =
-                runCatching { time(times[1].trim().substringBefore(' ')) }.getOrNull() ?: continue
-            val text = mutableListOf<String>()
-            while (index < lines.size && lines[index].isNotBlank()) text += lines[index++]
-            if (end <= start || text.isEmpty()) continue
-            result +=
-                Cue(
-                    start,
-                    end,
-                    text
-                        .joinToString("\n")
-                        .replace(Regex("<[^>]+>"), "")
-                        .replace("&amp;", "&")
-                        .replace("&lt;", "<")
-                        .replace("&gt;", ">")
-                        .replace("&nbsp;", " "),
-                )
+        WebvttParser().parse(bytes, 0, bytes.size, SubtitleParser.OutputOptions.allCues()) { group
+            ->
+            val text = group.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
+            val start = group.startTimeUs / 1000
+            val end = group.endTimeUs / 1000
+            if (text.isNotBlank() && start >= 0 && end > start) result += Cue(start, end, text)
         }
         return result.sortedBy { it.startMs }
     }
@@ -88,16 +76,8 @@ object SubtitleTimeline {
     // Keep a readable context during quiet intervals, while current() retains exact timing.
     fun anchor(cues: List<Cue>, positionMs: Long): Int {
         if (cues.isEmpty()) return -1
-        var low = 0
-        var high = cues.size - 1
-        var found = -1
-        while (low <= high) {
-            val middle = (low + high) ushr 1
-            if (cues[middle].startMs <= positionMs) {
-                found = middle
-                low = middle + 1
-            } else high = middle - 1
-        }
-        return found.coerceAtLeast(0)
+        // An upper-bound insertion point also selects the last duplicate timestamp.
+        val insertion = cues.binarySearch { if (it.startMs <= positionMs) -1 else 1 }
+        return (-insertion - 2).coerceAtLeast(0)
     }
 }

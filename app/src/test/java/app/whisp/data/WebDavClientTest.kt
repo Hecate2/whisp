@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -27,21 +27,23 @@ class WebDavClientTest {
     @Test
     fun usesDepthOneAndUtf8Credentials() {
         MockWebServer().use { server ->
+            server.start()
             server.enqueue(
-                MockResponse()
-                    .setResponseCode(207)
-                    .setBody(
+                MockResponse.Builder()
+                    .code(207)
+                    .body(
                         """<d:multistatus xmlns:d="DAV:">${response("/ASMR/", true)}</d:multistatus>""",
-                    ),
+                    )
+                    .build(),
             )
             val source = SourceEntity("a", "NAS", "webdav", server.url("/ASMR/").toString(), "听者")
             WebDavClient(OkHttpClient()).list(server.url("/ASMR/"), source, "密码")
             val request = server.takeRequest()
             assertEquals("PROPFIND", request.method)
-            assertEquals("1", request.getHeader("Depth"))
+            assertEquals("1", request.headers["Depth"])
             assertEquals(
                 Credentials.basic("听者", "密码", Charsets.UTF_8),
-                request.getHeader("Authorization"),
+                request.headers["Authorization"],
             )
         }
     }

@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
+import android.app.Application
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = Application::class)
 class SubtitleTimelineTest {
     @Test
     fun quietIntervalsKeepContextAndBackwardSeekChangesIt() {
@@ -47,5 +53,60 @@ class SubtitleTimelineTest {
             )
         assertEquals(1, cues.size)
         assertEquals("正确字幕", cues.single().text)
+    }
+
+    @Test
+    fun webvttCommentsStylesAndEntitiesUseStandardParsing() {
+        val cues =
+            SubtitleTimeline.vtt(
+                """
+                WEBVTT
+
+                NOTE
+                00:00:01.000 --> 00:00:02.000
+                Comment text
+
+                STYLE
+                ::cue { color: white; }
+
+                cue-1
+                00:00:03.000 --> 00:00:04.000
+                <b>Text</b> &lt; &gt; &amp; &nbsp;
+                """
+                    .trimIndent(),
+            )
+        assertEquals(1, cues.size)
+        assertEquals(3000L, cues.single().startMs)
+        assertEquals("Text < > &  ", cues.single().text)
+    }
+
+    @Test
+    fun overlappingCuesKeepBothLinesAndTheirBoundaries() {
+        val cues =
+            SubtitleTimeline.vtt(
+                """
+                WEBVTT
+
+                00:00:01.000 --> 00:00:03.000
+                One
+
+                00:00:02.000 --> 00:00:04.000
+                Two
+                """
+                    .trimIndent(),
+            )
+        assertEquals(listOf(1000L, 2000L, 3000L), cues.map { it.startMs })
+        assertEquals(listOf(2000L, 3000L, 4000L), cues.map { it.endMs })
+        assertEquals(listOf("One", "One\nTwo", "Two"), cues.map { it.text })
+        assertEquals(1, SubtitleTimeline.current(cues, 2500))
+        assertEquals(-1, SubtitleTimeline.current(cues, 4000))
+    }
+
+    @Test
+    fun anchorSupportsDuplicateTimestampsAndMaximumPosition() {
+        val cues = listOf(Cue(1000, 2000, "One"), Cue(1000, 3000, "Two"))
+        assertEquals(0, SubtitleTimeline.anchor(cues, 0))
+        assertEquals(1, SubtitleTimeline.anchor(cues, 1000))
+        assertEquals(1, SubtitleTimeline.anchor(cues, Long.MAX_VALUE))
     }
 }

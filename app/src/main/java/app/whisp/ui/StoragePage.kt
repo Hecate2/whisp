@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,7 +59,7 @@ internal fun StoragePage(model: AppViewModel, back: () -> Unit) {
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.Outlined.ArrowBack, "返回来源", Muted, back)
+                IconAction(Icons.AutoMirrored.Outlined.ArrowBack, "返回来源", Muted, back)
                 Text(
                     "存储",
                     fontFamily = FontFamily.Serif,

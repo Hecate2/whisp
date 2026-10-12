@@ -6,7 +6,7 @@ import android.content.ComponentName
 import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.*
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,8 +18,8 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
+import mockwebserver3.*
 import okhttp3.Credentials
-import okhttp3.mockwebserver.*
 import okio.Buffer
 import org.junit.*
 import org.junit.Assert.*
@@ -28,8 +28,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackIntegrationTest {
-    @get:Rule val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0)
+    val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     private val instrumentation
         get() = InstrumentationRegistry.getInstrumentation()
 
@@ -51,15 +52,12 @@ class PlaybackIntegrationTest {
         server.dispatcher =
             object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
-                    if (
-                        request.getHeader("Authorization") != Credentials.basic("listener", "test")
-                    ) {
+                    if (request.headers["Authorization"] != Credentials.basic("listener", "test")) {
                         badAuth.incrementAndGet()
-                        return MockResponse().setResponseCode(401)
+                        return MockResponse.Builder().code(401).build()
                     }
                     val relative =
-                        request.requestUrl!!
-                            .pathSegments
+                        request.url.pathSegments
                             .drop(1)
                             .filter { it.isNotBlank() }
                             .joinToString("/")
@@ -79,35 +77,36 @@ class PlaybackIntegrationTest {
                                         .build()
                                 """<d:response><d:href>${xml(url.encodedPath)}</d:href><d:propstat><d:prop><d:displayname>${xml(f.name)}</d:displayname><d:resourcetype>${if (f.isDirectory) "<d:collection/>" else ""}</d:resourcetype><d:getcontentlength>${f.length()}</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"""
                             }
-                        return MockResponse()
-                            .setResponseCode(207)
-                            .setBody("<d:multistatus xmlns:d=\"DAV:\">$body</d:multistatus>")
+                        return MockResponse.Builder()
+                            .code(207)
+                            .body("<d:multistatus xmlns:d=\"DAV:\">$body</d:multistatus>")
+                            .build()
                     }
-                    if (!file.isFile) return MockResponse().setResponseCode(404)
+                    if (!file.isFile) return MockResponse.Builder().code(404).build()
                     val range =
-                        request
-                            .getHeader("Range")
+                        request.headers["Range"]
                             ?.removePrefix("bytes=")
                             ?.substringBefore('-')
                             ?.toLongOrNull() ?: 0
                     if (range > 0) ranged.incrementAndGet()
                     val bytes = file.readBytes()
-                    val response = MockResponse().setHeader("Accept-Ranges", "bytes")
-                    if (range >= bytes.size) return response.setResponseCode(416)
+                    val response = MockResponse.Builder().setHeader("Accept-Ranges", "bytes")
+                    if (range >= bytes.size) return response.code(416).build()
                     val end =
-                        request
-                            .getHeader("Range")
+                        request.headers["Range"]
                             ?.removePrefix("bytes=")
                             ?.substringAfter('-')
                             ?.toLongOrNull()
                             ?.coerceAtMost(bytes.size - 1L) ?: (bytes.size - 1L)
-                    if (request.getHeader("Range") != null)
+                    if (request.headers["Range"] != null)
                         response
-                            .setResponseCode(206)
+                            .code(206)
                             .setHeader("Content-Range", "bytes $range-$end/${bytes.size}")
-                    return response.setBody(
-                        Buffer().write(bytes, range.toInt(), (end - range + 1).toInt()),
-                    )
+                    return response
+                        .body(
+                            Buffer().write(bytes, range.toInt(), (end - range + 1).toInt()),
+                        )
+                        .build()
                 }
             }
         server.start()
@@ -217,7 +216,7 @@ class PlaybackIntegrationTest {
         }
         val position = runBlocking { repo.dao.progress(detail.work.id)!! }
         assertTrue(position.positionMs >= 15 * 60_000L)
-        server.shutdown()
+        server.close()
         runBlocking {
             repo.removeSource("integration-nas")
             assertTrue(repo.dao.details(detail.work.id)!!.work.offlineAttachments)
@@ -240,6 +239,6 @@ class PlaybackIntegrationTest {
 
     @After
     fun cleanup() {
-        runCatching { server.shutdown() }
+        runCatching { server.close() }
     }
 }

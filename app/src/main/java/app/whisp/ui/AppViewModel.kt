@@ -3,6 +3,7 @@ package app.whisp.ui
 
 import android.content.ComponentName
 import android.os.Bundle
+import android.util.LruCache
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -50,13 +51,8 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     val loopDraftStart = MutableStateFlow(-1L)
     private var loopDraftTrack: String? = null
     private var subtitleTrackId: String? = null
-    private val subtitleCache =
-        object : LinkedHashMap<String, List<Cue>>(16, .75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Cue>>?) =
-                size > 16
-        }
+    private val subtitleCache = LruCache<String, List<Cue>>(16)
     val error = MutableStateFlow<String?>(null)
-    val search = MutableStateFlow("")
     private var subtitleJob: Job? = null
     private var openingJob: Job? = null
     private var openingGeneration = 0
@@ -409,9 +405,9 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     fun loadSubtitles(id: String?) {
         subtitleJob?.cancel()
         subtitleTrackId = id
-        cues.value = subtitleCache[id].orEmpty()
+        cues.value = id?.let { subtitleCache[it] }.orEmpty()
         subtitleLoading.value = false
-        if (id == null || subtitleCache.containsKey(id)) return
+        if (id == null || subtitleCache[id] != null) return
         subtitleJob = viewModelScope.launch {
             try {
                 val track = repository.dao.track(id) ?: return@launch
@@ -429,7 +425,7 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
                         )
                     }
                 ensureActive()
-                subtitleCache[id] = parsed
+                subtitleCache.put(id, parsed)
                 if (subtitleTrackId == id) cues.value = parsed
             } catch (e: CancellationException) {
                 throw e
@@ -444,6 +440,5 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     override fun onCleared() {
         closed = true
         MediaController.releaseFuture(future)
-        super.onCleared()
     }
 }

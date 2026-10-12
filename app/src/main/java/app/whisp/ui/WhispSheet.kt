@@ -13,7 +13,11 @@ internal fun WhispSheet(
     onDismissRequest: () -> Unit,
     content: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
 ) {
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheet =
+        rememberBottomSheetState(
+            initialValue = SheetValue.Hidden,
+            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+        )
     val scope = rememberCoroutineScope()
     var closing by remember { mutableStateOf(false) }
     val dismiss = {

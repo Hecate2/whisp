@@ -13,9 +13,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import app.whisp.ui.AppViewModel
 import app.whisp.ui.WhispRoot
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -69,11 +70,7 @@ class MainActivity : ComponentActivity() {
         val model =
             ViewModelProvider(
                 this,
-                object : ViewModelProvider.Factory {
-                    @Suppress("UNCHECKED_CAST")
-                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                        AppViewModel(repository) as T
-                },
+                viewModelFactory { initializer { AppViewModel(repository) } },
             )[AppViewModel::class.java]
         setContent { WhispRoot(model, playerRequest) }
         if (Build.VERSION.SDK_INT >= 33)

@@ -4,6 +4,8 @@
 
 ## 单元测试
 
+格式、测试与 Lint 的统一入口见 [工程质量](QUALITY.md)。
+
 ```sh
 ./gradlew :app:testDebugUnitTest :app:lintDebug
 ```

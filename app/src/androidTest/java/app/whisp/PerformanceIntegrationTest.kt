@@ -4,7 +4,7 @@ package app.whisp
 import android.content.ComponentName
 import android.os.Bundle
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -35,10 +35,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class PerformanceIntegrationTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val permission =
         androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     private val instrumentation
         get() = InstrumentationRegistry.getInstrumentation()
 
@@ -157,7 +157,7 @@ class PerformanceIntegrationTest {
             ui.activity
                 .getSystemService(android.app.ActivityManager::class.java)
                 .appTasks
-                .first { it.taskInfo.taskId == ui.activity.taskId }
+                .first { it.taskInfo?.taskId == ui.activity.taskId }
                 .moveToFront()
         }
         assertTrue(

@@ -5,7 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.SimpleCache
@@ -203,10 +203,10 @@ class StorageIntegrationTest {
 
 @RunWith(AndroidJUnit4::class)
 class StorageUiIntegrationTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val permission =
         androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun storageControlsPersistAcrossActivityRecreation() {
@@ -220,7 +220,7 @@ class StorageUiIntegrationTest {
             ui.activity
                 .getSystemService(android.app.ActivityManager::class.java)
                 .appTasks
-                .first { it.taskInfo.taskId == ui.activity.taskId }
+                .first { it.taskInfo?.taskId == ui.activity.taskId }
                 .moveToFront()
         }
         assertTrue(
@@ -281,7 +281,10 @@ class StorageUiIntegrationTest {
 
 @RunWith(AndroidJUnit4::class)
 class ArtworkCacheReloadIntegrationTest {
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0)
+    val permission =
+        androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun visibleCoverRecoversWhenEvictedWithoutChangingThePage() {

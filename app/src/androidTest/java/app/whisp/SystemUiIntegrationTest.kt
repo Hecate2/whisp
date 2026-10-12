@@ -8,7 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.activity.BackEventCompat
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
@@ -32,8 +32,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class SystemUiIntegrationTest {
-    @get:Rule val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0)
+    val permission = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     private val instrumentation
         get() = InstrumentationRegistry.getInstrumentation()
 
@@ -46,7 +47,7 @@ class SystemUiIntegrationTest {
             instrumentation.runOnMainSync {
                 val tasks =
                     ui.activity.getSystemService(android.app.ActivityManager::class.java).appTasks
-                tasks.first { it.taskInfo.taskId == ui.activity.taskId }.moveToFront()
+                tasks.first { it.taskInfo?.taskId == ui.activity.taskId }.moveToFront()
             }
             assertTrue(device.wait(Until.hasObject(By.pkg(repo.context.packageName)), 5000))
         }
@@ -55,7 +56,7 @@ class SystemUiIntegrationTest {
             ui.activity
                 .getSystemService(android.app.ActivityManager::class.java)
                 .appTasks
-                .filter { it.taskInfo.taskId != ui.activity.taskId }
+                .filter { it.taskInfo?.taskId != ui.activity.taskId }
                 .forEach { it.finishAndRemoveTask() }
         }
         foreground()

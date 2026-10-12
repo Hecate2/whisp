@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
+import androidx.core.net.toUri
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.MediaItem
@@ -146,7 +147,7 @@ class LibraryRepository(val context: Context) {
     private val networkFactory = DataSource.Factory {
         val fallback = httpFactory.createDataSource()
         val smbData = SmbDataSource { uri ->
-            val sourceId = Uri.parse(uri).authority ?: throw IOException("来源未关联")
+            val sourceId = uri.toUri().authority ?: throw IOException("来源未关联")
             val source =
                 runBlocking(Dispatchers.IO) { dao.source(sourceId) } ?: throw IOException("来源已移除")
             require(source.kind == "smb") { "来源类型不匹配" }
@@ -542,7 +543,7 @@ class LibraryRepository(val context: Context) {
                                             storageReady.await()
                                             cacheArtwork(
                                                 asset.id,
-                                                session!!.bytes(
+                                                session.bytes(
                                                     locations.getValue(asset.id).uri,
                                                     16 * 1024 * 1024,
                                                 ),
@@ -695,7 +696,7 @@ class LibraryRepository(val context: Context) {
                     if (!old.isFile) continue
                     if (id == stableId("${work.id}|custom-cover")) {
                         val target = File(customArtworkDir, id)
-                        if (!target.isFile) atomicWrite(target, old.readBytes())
+                        if (!target.isFile) atomicFile(target, old.readBytes())
                         if (target.isFile) old.delete()
                     } else if (dao.locations(id).isNotEmpty()) {
                         if (artworkCache.get(id) == null)
@@ -758,11 +759,9 @@ class LibraryRepository(val context: Context) {
             artworkReload.update { it + 1 }
         }
 
-    private fun atomicWrite(file: File, bytes: ByteArray) = atomicFile(file, bytes)
-
     suspend fun readAsset(id: String, limit: Int = 8 * 1024 * 1024): ByteArray =
         withContext(Dispatchers.IO) {
-            val uri = Uri.parse(resolve(id))
+            val uri = resolve(id).toUri()
             when (uri.scheme) {
                 "content",
                 "file" ->
@@ -780,7 +779,7 @@ class LibraryRepository(val context: Context) {
         }
 
     private suspend fun localDuration(id: String): Long {
-        val uri = Uri.parse(resolve(id))
+        val uri = resolve(id).toUri()
         if (uri.scheme !in setOf("content", "file")) return 0
         val retriever = MediaMetadataRetriever()
         return try {
@@ -791,12 +790,6 @@ class LibraryRepository(val context: Context) {
             retriever.release()
         }
     }
-
-    suspend fun probeDuration(id: String) =
-        withContext(Dispatchers.IO) {
-            val duration = localDuration(id)
-            if (duration > 0) dao.updateDuration(id, duration)
-        }
 
     fun mediaMetadata(
         track: TrackEntity,
@@ -812,8 +805,7 @@ class LibraryRepository(val context: Context) {
                 .setIsPlayable(true)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER)
                 .setExtras(android.os.Bundle().apply { putString("workId", work.id) })
-        if (!hideArtwork)
-            artwork(work.coverId)?.let { metadata.setArtworkUri(Uri.fromFile(it as File)) }
+        if (!hideArtwork) artwork(work.coverId)?.let { metadata.setArtworkUri(Uri.fromFile(it)) }
         if (hideArtwork) metadata.setTitle("正在收听").setArtist("Whisp").setAlbumTitle("Whisp")
         return metadata.build()
     }
@@ -834,9 +826,7 @@ class LibraryRepository(val context: Context) {
         for (track in detail.tracks) {
             val uri = resolve(track.id)
             val request =
-                DownloadRequest.Builder(track.id, Uri.parse(uri))
-                    .setCustomCacheKey(track.id)
-                    .build()
+                DownloadRequest.Builder(track.id, uri.toUri()).setCustomCacheKey(track.id).build()
             DownloadService.sendAddDownload(context, OfflineService::class.java, request, false)
         }
         WorkManager.getInstance(context)
@@ -853,7 +843,7 @@ class LibraryRepository(val context: Context) {
         val detail = dao.details(id) ?: return
         detail.attachments.forEach { attachment ->
             val file = File(offlineDir, attachment.id)
-            if (!file.isFile) atomicWrite(file, readAsset(attachment.id, 64 * 1024 * 1024))
+            if (!file.isFile) atomicFile(file, readAsset(attachment.id, 64 * 1024 * 1024))
         }
         detail.work.coverId?.let { cover ->
             val target = File(offlineDir, cover)
@@ -863,7 +853,7 @@ class LibraryRepository(val context: Context) {
                         ?: File(artworkDir, cover).takeIf {
                             cover == stableId("${detail.work.id}|custom-cover") && it.isFile
                         }
-                atomicWrite(target, custom?.readBytes() ?: readAsset(cover, 16 * 1024 * 1024))
+                atomicFile(target, custom?.readBytes() ?: readAsset(cover, 16 * 1024 * 1024))
             }
         }
         dao.attachmentsReady(id, true)
@@ -877,8 +867,8 @@ class LibraryRepository(val context: Context) {
                 context.contentResolver.openInputStream(uri)?.use {
                     boundedRead(it, 16 * 1024 * 1024)
                 } ?: error("无法读取图片")
-            atomicWrite(File(customArtworkDir, id), bytes)
-            File(offlineDir, id).takeIf { it.isFile }?.let { atomicWrite(it, bytes) }
+            atomicFile(File(customArtworkDir, id), bytes)
+            File(offlineDir, id).takeIf { it.isFile }?.let { atomicFile(it, bytes) }
             dao.putWorks(listOf(work.copy(coverId = id)))
             artworkRevision.update { it + 1 }
             storageChanged()

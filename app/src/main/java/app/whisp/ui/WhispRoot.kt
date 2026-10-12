@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.*
@@ -133,7 +135,7 @@ fun clock(ms: Long): String {
 
 private fun shortTitle(value: String) = value.substringAfter('～', value).trim('～', ' ', '【', '】')
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
@@ -674,7 +676,6 @@ private fun WorkCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun DetailPage(
@@ -723,7 +724,7 @@ private fun DetailPage(
                         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        IconAction(Icons.Outlined.ArrowBack, "返回作品库", action = back)
+                        IconAction(Icons.AutoMirrored.Outlined.ArrowBack, "返回作品库", action = back)
                         Row {
                             IconAction(
                                 if (detail.work.favorite) Icons.Outlined.Favorite
@@ -852,7 +853,7 @@ private fun DetailPage(
                     ResourceRow(
                         it.title,
                         if (it.kind == "image") Icons.Outlined.Image
-                        else Icons.Outlined.InsertDriveFile,
+                        else Icons.AutoMirrored.Outlined.InsertDriveFile,
                     ) {
                         attachment = it
                     }
@@ -915,7 +916,6 @@ private fun ResourceRow(title: String, icon: ImageVector, click: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AttachmentDialog(
     attachment: AttachmentEntity,
@@ -942,7 +942,7 @@ private fun AttachmentDialog(
             loading = false
         }
     }
-    ModalBottomSheet(onDismissRequest = dismiss, containerColor = Surface) {
+    WhispSheet(onDismissRequest = dismiss) {
         Text(
             attachment.title,
             fontSize = 20.sp,

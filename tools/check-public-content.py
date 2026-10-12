@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Check Git candidates and staged blobs without printing matched secret values."""
+
 from pathlib import Path
 import ipaddress
 import re

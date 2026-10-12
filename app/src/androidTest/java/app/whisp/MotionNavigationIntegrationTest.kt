@@ -3,7 +3,7 @@ package app.whisp
 
 import android.graphics.Bitmap
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -19,10 +19,10 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class MotionNavigationIntegrationTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val permission =
         androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun libraryScrollSurvivesCoverNavigationAndReducedMotion() {
@@ -33,7 +33,7 @@ class MotionNavigationIntegrationTest {
                 ui.activity
                     .getSystemService(android.app.ActivityManager::class.java)
                     .appTasks
-                    .first { it.taskInfo.taskId == ui.activity.taskId }
+                    .first { it.taskInfo?.taskId == ui.activity.taskId }
                     .moveToFront()
             }
             assertTrue(
