@@ -8,6 +8,8 @@ plugins {
 }
 
 val releaseSecretsFile = rootProject.file(".signing/signing.properties")
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+val splitApks = providers.gradleProperty("splitApks").isPresent
 val releaseSecrets =
     Properties().apply {
         if (releaseSecretsFile.isFile) releaseSecretsFile.inputStream().use { load(it) }
@@ -20,10 +22,18 @@ android {
         applicationId = "app.whisp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.3.4"
+        versionCode = 10
+        versionName = "0.3.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk { abiFilters += "arm64-v8a" }
+        if (!splitApks) ndk { abiFilters += supportedAbis }
+    }
+    splits {
+        abi {
+            isEnable = splitApks
+            reset()
+            include(*supportedAbis.toTypedArray())
+            isUniversalApk = true
+        }
     }
     signingConfigs {
         if (releaseSecretsFile.isFile)

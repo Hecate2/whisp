@@ -13,7 +13,7 @@ Whisp 是面向本地文件和 NAS 的 Android 音频播放器，适合音声、
 - 系统媒体控制、系统续播、通知封面隐私和最近任务预览隐私。
 - 共享封面转场、系统返回手势和减少动态效果设置。
 
-运行环境为 Android 8.0 或更新系统，构建目标为 `arm64-v8a`（ARMv8 64 位）。
+运行环境为 Android 8.0 或更新系统，支持 `arm64-v8a`、`armeabi-v7a`、`x86_64` 和 `x86`。GitHub Release 提供四种架构的独立安装包及覆盖全部架构的通用安装包。
 
 ## 文件组织
 
@@ -51,10 +51,12 @@ sudo apt-get install openjdk-21-jdk-headless adb
 Android SDK 需自行安装相应平台。Debug APK 位于 `app/build/outputs/apk/debug/`。
 
 ```sh
-./gradlew :app:assembleRelease :app:lintRelease
+./gradlew -PsplitApks :app:assembleRelease :app:lintRelease
 ```
 
 Release 启用 R8 与资源裁剪，默认产物为待签名 APK。签名配置位于本机的 `.signing/signing.properties`，字段为 `storeFile`、`storePassword`、`keyAlias` 和 `keyPassword`，其中 `storeFile` 相对 `.signing/`。配置完成后构建会生成已签名 APK；签名目录由本机管理，并由 Git 排除。
+
+`-PsplitApks` 使用 Android Gradle Plugin 的 ABI 拆分功能，在 `app/build/outputs/apk/release/` 生成四个架构安装包和 `app-universal-release.apk`。常规构建生成包含全部架构的单个安装包。
 
 ## 测试与公开内容检查
 

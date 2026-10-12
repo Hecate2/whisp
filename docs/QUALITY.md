@@ -12,7 +12,7 @@ python3 -m venv .venv
 export WHISP_BLACK="$PWD/.venv/bin/black"
 ./gradlew fmt
 ./gradlew qualityCheck
-./gradlew :app:assembleRelease :app:assembleDebugAndroidTest
+./gradlew -PsplitApks :app:assembleRelease :app:assembleDebugAndroidTest
 ```
 
 `fmt` 统一排版，`qualityCheck` 执行格式检查、公开内容检查、单元测试及 Debug / Release Lint。GitHub Actions 对推送和 Pull Request 执行同一套检查，并编译 Release 和设备测试 APK。
@@ -63,6 +63,6 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 
 Material 3 固定为 `1.5.0-beta01`，当前动效配置使用该版本公开的 `MotionScheme` 接口；共享元素转场使用 Compose 的实验 API。对应功能通过界面回归验证。系统版本分支承担 Android 8–16 的兼容处理，`smoke` 构建承担独立设备测试。
 
-目标 API 36 对应当前系统行为范围，Lint 提示 API 37 的目标版本适配。ARMv8 构建范围对应架构提示，导出的媒体服务通过 `MediaLibrarySession.onConnect` 验证控制器身份。
+目标 API 36 对应当前系统行为范围，Lint 提示 API 37 的目标版本适配。发布构建包含四种 ABI 和通用安装包，导出的媒体服务通过 `MediaLibrarySession.onConnect` 验证控制器身份。
 
 Kotlin 编译器将警告视为错误。Gradle 9.8 的弃用报告中，`Configuration.setVisible` 来自 AGP 9.4.1 内部配置；后续 AGP 升级继续追踪该上游兼容提示。

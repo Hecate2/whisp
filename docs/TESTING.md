@@ -55,7 +55,7 @@ adb install -r app/build/outputs/apk/androidTest/smoke/app-smoke-androidTest.apk
 adb shell am instrument -w -e class app.whisp.PerformanceIntegrationTest app.whisp.smoketest.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-每个测试类别使用新的隔离应用数据，清理目标为专用测试设备或模拟器上的 `app.whisp.smoketest`。界面测试在设备解锁、测试应用处于前台时运行。当前 ABI 配置适用于 arm64 设备或 arm64 模拟器。
+每个测试类别使用新的隔离应用数据，清理目标为专用测试设备或模拟器上的 `app.whisp.smoketest`。界面测试在设备解锁、测试应用处于前台时运行。常规构建的通用安装包覆盖四种 ABI，可安装到对应设备或模拟器。
 
 `PerformanceIntegrationTest`、`SystemMediaIntegrationTest`、`MotionNavigationIntegrationTest` 和 `StorageIntegrationTest` 的样本由测试自行生成。`SmbIntegrationTest`、`PlaybackFlowIntegrationTest` 和 `StorageAudioIntegrationTest` 使用专用 SMB 共享，地址与测试凭据通过 instrumentation 参数传入；参数定义见各测试源码。
 
