@@ -79,6 +79,7 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     val error = MutableStateFlow<String?>(null)
     private var subtitleJob: Job? = null
     private var openingJob: Job? = null
+    private var openingWorkId: String? = null
     private var openingGeneration = 0
     private var openingPlayWhenReady = true
     private var controller: MediaController? = null
@@ -200,6 +201,7 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     ) {
         val generation = ++openingGeneration
         openingJob?.cancel()
+        openingWorkId = detail.work.id
         openingPlayWhenReady = true
         openingJob = viewModelScope.launch {
             try {
@@ -295,6 +297,7 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
                 error.value = e.message ?: "无法打开作品"
             } finally {
                 if (generation == openingGeneration) {
+                    openingWorkId = null
                     openingTrackId.value = null
                     updatePlayer()
                 }
@@ -383,6 +386,28 @@ class AppViewModel(val repository: LibraryRepository) : ViewModel() {
     fun favorite(id: String) = action { repository.dao.toggleFavorite(id) }
 
     fun download(id: String) = action { repository.downloadWork(id) }
+
+    suspend fun removeAsmrWork(detail: WorkDetails) {
+        if (openingWorkId == detail.work.id) {
+            ++openingGeneration
+            openingJob?.cancelAndJoin()
+            openingWorkId = null
+            openingTrackId.value = null
+        }
+        val ids = detail.tracks.map { it.id }.toSet()
+        controller?.let { c ->
+            if (c.currentMediaItem?.mediaId in ids) {
+                c.pause()
+                c.stop()
+                loadSubtitles(null)
+            }
+            for (index in c.mediaItemCount - 1 downTo 0) if (c.getMediaItemAt(index).mediaId in ids)
+                c.removeMediaItem(index)
+        }
+        ids.forEach { subtitleCache.remove(it) }
+        repository.removeAsmrWork(detail.work.id)
+        updatePlayer()
+    }
 
     fun markLoopStart() {
         loopDraftTrack = player.value.trackId

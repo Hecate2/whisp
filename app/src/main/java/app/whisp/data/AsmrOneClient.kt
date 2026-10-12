@@ -2,20 +2,14 @@
 package app.whisp.data
 
 import java.io.IOException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 
 data class AsmrWork(
     val id: Long,
@@ -23,14 +17,32 @@ data class AsmrWork(
     val rj: String,
     val artist: String,
     val coverUrl: String?,
+    val coverPath: String = "_asmr-cover/main.jpg",
+    val series: String? = null,
 ) {
     val workId
         get() = stableId("asmr.one|work|$id")
 
     val coverId
-        get() = coverUrl?.let { stableId("$workId|_asmr-cover/main.jpg") }
+        get() = coverUrl?.let { stableId("$workId|$coverPath") }
 
-    fun entity() = WorkEntity(workId, rj, title, title, artist = artist, coverId = coverId)
+    fun entity() =
+        WorkEntity(
+            workId,
+            rj,
+            title,
+            title,
+            artist = artist,
+            originalArtist = artist,
+            coverUrl = coverUrl.takeIf { coverPath.startsWith("_dlsite-cover/") },
+            series = series,
+            coverId = coverId,
+        )
+}
+
+fun isAsmrOneWork(work: WorkEntity): Boolean {
+    val id = work.rj?.removePrefix("RJ")?.toLongOrNull() ?: return false
+    return work.id == stableId("asmr.one|work|$id")
 }
 
 data class AsmrPage(val works: List<AsmrWork>, val hasMore: Boolean)
@@ -132,57 +144,32 @@ class AsmrOneClient(
         }
         walk(tree, work.rj, 0)
         work.coverUrl?.let {
-            files += FileEntry("${work.rj}/_asmr-cover/main.jpg", resourceUrl(it).toString(), false)
+            files += FileEntry("${work.rj}/${work.coverPath}", resourceUrl(it).toString(), false)
         }
         val indexed = LibraryIndexer.index(files, sourceId, generation, work.entity())
         require(indexed.tracks.isNotEmpty()) { "作品暂无可播放音轨" }
         return indexed.copy(
             attachments =
                 indexed.attachments.map {
-                    if (it.relativePath == "_asmr-cover/main.jpg") it.copy(kind = "cover") else it
+                    if (it.relativePath == work.coverPath) it.copy(kind = "cover") else it
                 },
             tracks = indexed.tracks.map { it.copy(durationMs = durations[it.relativePath] ?: 0) },
         )
     }
 
     suspend fun bytes(url: String, limit: Int): ByteArray =
-        withContext(Dispatchers.IO) {
-            http.newCall(request(resourceUrl(url))).execute().use { response ->
-                checkStatus(response)
-                boundedRead(response.body.byteStream(), limit)
-            }
-        }
+        http.onlineBytes(request(resourceUrl(url)), limit)
 
     private suspend fun json(url: HttpUrl): JsonElement =
-        suspendCancellableCoroutine { continuation ->
-            val call = http.newCall(request(url))
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(
-                object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        if (continuation.isActive)
-                            continuation.resumeWithException(IOException("ASMR.ONE 连接失败", e))
-                    }
-
-                    override fun onResponse(call: Call, response: Response) {
-                        try {
-                            val result = response.use {
-                                checkStatus(it)
-                                Json.parseToJsonElement(
-                                    boundedRead(it.body.byteStream(), 4 * 1024 * 1024)
-                                        .toString(Charsets.UTF_8),
-                                )
-                            }
-                            if (continuation.isActive) continuation.resume(result)
-                        } catch (e: Exception) {
-                            if (continuation.isActive)
-                                continuation.resumeWithException(
-                                    if (e is IOException) e else IOException("ASMR.ONE 响应格式错误", e),
-                                )
-                        }
-                    }
-                },
-            )
+        try {
+            val bytes = http.onlineBytes(request(url), 4 * 1024 * 1024)
+            withContext(Dispatchers.Default) {
+                Json.parseToJsonElement(bytes.toString(Charsets.UTF_8))
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IOException("ASMR.ONE 读取失败", e)
         }
 
     private fun resourceUrl(value: String): HttpUrl {
@@ -201,12 +188,15 @@ class AsmrOneClient(
     private fun request(url: HttpUrl) =
         Request.Builder()
             .url(url)
-            .apply { MEDIA_HEADERS.forEach { (k, v) -> header(k, v) } }
+            .apply {
+                val dlsite =
+                    listOf("dlsite.com", "dlsite.jp").any {
+                        url.host == it || url.host.endsWith(".$it")
+                    }
+                if (dlsite) header("Referer", "https://www.dlsite.com/")
+                else MEDIA_HEADERS.forEach { (k, v) -> header(k, v) }
+            }
             .build()
-
-    private fun checkStatus(response: Response) {
-        if (!response.isSuccessful) throw IOException("ASMR.ONE 请求失败（${response.code}）")
-    }
 
     private fun parseWork(body: JsonObject): AsmrWork {
         val id = body["id"]?.jsonPrimitive?.longOrNull ?: throw IOException("作品编号无效")

@@ -55,6 +55,80 @@ class AsmrOneIntegrationTest {
     }
 
     @Test
+    fun deletionCancelsAnAttachmentWorkerBeforeWaitingForItsLock() {
+        val repo = (ui.activity.application as WhispApp).repository
+        assertTrue(repo.context.packageName.endsWith(".smoketest"))
+        val reading = AtomicInteger()
+        MockWebServer().use { server ->
+            server.start()
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        reading.incrementAndGet()
+                        return MockResponse.Builder()
+                            .body(Buffer().write(ByteArray(64)))
+                            .throttleBody(1, 1, TimeUnit.SECONDS)
+                            .build()
+                    }
+                }
+            val work = AsmrWork(99, "慢速示例作品", "RJ00000099", "示例声优", null).entity()
+            val sourceId = "slow-online-source"
+            val attachmentId = stableId("${work.id}|sample.png")
+            runBlocking {
+                repo.dao.putSource(
+                    SourceEntity(sourceId, "慢速测试来源", "asmrone", server.url("/").toString()),
+                )
+                repo.dao.putWorks(listOf(work))
+                repo.dao.putAttachments(
+                    listOf(
+                        AttachmentEntity(
+                            attachmentId,
+                            work.id,
+                            "示例图片",
+                            "sample.png",
+                            "sample.png",
+                            "image",
+                        ),
+                    ),
+                )
+                repo.dao.putLocations(
+                    listOf(
+                        LocationEntity(
+                            "slow-location",
+                            attachmentId,
+                            sourceId,
+                            server.url("/sample.png").toString(),
+                            64,
+                        ),
+                    ),
+                )
+            }
+            val manager = androidx.work.WorkManager.getInstance(repo.context)
+            val request =
+                androidx.work
+                    .OneTimeWorkRequestBuilder<AttachmentsWorker>()
+                    .setInputData(androidx.work.workDataOf("workId" to work.id))
+                    .build()
+            manager.enqueueUniqueWork(
+                "attachments-${work.id}",
+                androidx.work.ExistingWorkPolicy.KEEP,
+                request,
+            )
+            waitFor { reading.get() > 0 }
+            // The server needs over a minute to finish; removal must cancel it promptly.
+            runBlocking {
+                kotlinx.coroutines.withTimeout(5000) { repo.removeAsmrWork(work.id) }
+                assertNull(repo.dao.work(work.id))
+                assertTrue(repo.dao.locations(attachmentId).isEmpty())
+                assertFalse(
+                    File(repo.context.filesDir, "offline/attachments/$attachmentId").exists(),
+                )
+                repo.removeSource(sourceId)
+            }
+        }
+    }
+
+    @Test
     fun pagedBrowseImportRefreshPlaybackAndOfflineUseTheSharedLibrary() {
         val repo = (ui.activity.application as WhispApp).repository
         assertTrue(repo.context.packageName.endsWith(".smoketest"))
@@ -91,6 +165,20 @@ class AsmrOneIntegrationTest {
                         if (request.headers["Authorization"] != null) leaks.incrementAndGet()
                         val path = request.url.encodedPath
                         val response = MockResponse.Builder()
+                        if (path == "/maniax/product/info/ajax") {
+                            val rj = request.url.queryParameter("product_id")!!
+                            return response
+                                .body(
+                                    """{"$rj":{"product_id":"$rj","work_name":"官方示例作品${rj.drop(2).toLong()}","maker_name":"官方示例社团","work_image":"${server.url("/cover.png")}"}}""",
+                                )
+                                .build()
+                        }
+                        if (path.startsWith("/maniax/work/"))
+                            return response
+                                .body(
+                                    """<h1 id="work_name">官方示例作品</h1><table id="work_outline"><tr><th>声優</th><td><a>官方示例声优</a></td></tr></table>""",
+                                )
+                                .build()
                         if (path == "/api/works" || path.startsWith("/api/search/")) {
                             if (path.startsWith("/api/search/")) searches.incrementAndGet()
                             return response
@@ -131,6 +219,7 @@ class AsmrOneIntegrationTest {
                     }
                 }
             val sourceId = stableId("asmr.one")
+            val metadataClient = DlsiteClient(repo.http, server.url("/"))
             runBlocking {
                 repo.dao.putSource(
                     SourceEntity(sourceId, "测试在线来源", "asmrone", server.url("/").toString()),
@@ -178,11 +267,17 @@ class AsmrOneIntegrationTest {
             ui.onNodeWithTag("asmr-search").performTextInput("示例")
             ui.onNodeWithContentDescription("提交在线搜索").performClick()
             waitFor { searches.get() > 0 }
-            ui.onNodeWithContentDescription("示例在线作品1").performClick()
+            runBlocking { repo.importAsmrWork(sourceId, 1, metadataClient) }
+            waitFor { repo.library.value.any { it.work.title == "官方示例作品1" } }
+            ui.onNodeWithText("作品", useUnmergedTree = true).performClick()
+            ui.onNodeWithContentDescription("官方示例作品1").performClick()
             ui.waitUntil(15000) { ui.onAllNodesWithText("播放作品").fetchSemanticsNodes().isNotEmpty() }
             val workId = stableId("asmr.one|work|1")
             val detail = runBlocking { repo.dao.details(workId)!! }
             assertEquals(2, detail.tracks.size)
+            assertEquals("官方示例声优", detail.work.artist)
+            assertEquals("官方示例作品1", detail.work.originalTitle)
+            assertNotEquals(stableId("$workId|_asmr-cover/main.jpg"), detail.work.coverId)
             assertEquals(40000L, detail.tracks.first().durationMs)
             val track = detail.tracks.first { it.fileName.startsWith("01") }
             assertNotNull(track.subtitleId)
@@ -237,8 +332,8 @@ class AsmrOneIntegrationTest {
                         BookmarkEntity("bookmark-test", workId, track.id, 1000, "示例书签"),
                     )
                     revision.set(2)
-                    repo.importAsmrWork(sourceId, 2)
-                    repo.importAsmrWork(sourceId, 1)
+                    repo.importAsmrWork(sourceId, 2, metadataClient)
+                    repo.importAsmrWork(sourceId, 1, metadataClient)
                     val refreshed = repo.dao.details(workId)!!
                     assertEquals("自定义标题", refreshed.work.title)
                     assertTrue(refreshed.work.favorite)
@@ -277,7 +372,23 @@ class AsmrOneIntegrationTest {
                     controller.play()
                 }
                 waitFor { main { controller.isPlaying } }
-                main { controller.pause() }
+                // Remove a downloaded work while it is playing, using the real UI.
+                ui.onNodeWithContentDescription("收起播放器").performClick()
+                ui.onNodeWithContentDescription("作品信息").performClick()
+                ui.onNodeWithText("删除作品").performClick()
+                ui.onNodeWithText("删除").performClick()
+                waitFor { runBlocking { repo.dao.work(workId) == null } }
+                waitFor { main { controller.mediaItemCount == 0 && !controller.isPlaying } }
+                runBlocking {
+                    repo.savePlaybackProgress(ProgressEntity(workId, track.id, 1000))
+                    repo.flushPlaybackProgress()
+                    assertNull(repo.dao.progress(workId))
+                    assertTrue(repo.bookmarks.value.none { it.workId == workId })
+                    detail.tracks.forEach { assertTrue(repo.dao.locations(it.id).isEmpty()) }
+                    assertNotNull(repo.dao.work(stableId("asmr.one|work|2")))
+                }
+                waitFor { detail.tracks.all { repo.downloads.value[it.id] == null } }
+                assertNull(repo.artwork(detail.work.coverId))
             } finally {
                 main { MediaController.releaseFuture(future) }
             }

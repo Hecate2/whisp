@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+package app.whisp.data
+
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.*
+
+internal suspend fun OkHttpClient.onlineBytes(request: Request, limit: Int): ByteArray =
+    suspendCancellableCoroutine { continuation ->
+        val call = newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        val bytes = response.use {
+                            if (!it.isSuccessful) throw IOException("请求失败（${it.code}）")
+                            boundedRead(it.body.byteStream(), limit)
+                        }
+                        if (continuation.isActive) continuation.resume(bytes)
+                    } catch (e: Exception) {
+                        if (continuation.isActive) continuation.resumeWithException(e)
+                    }
+                }
+            },
+        )
+    }

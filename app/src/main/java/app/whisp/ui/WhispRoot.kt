@@ -324,8 +324,12 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                 fadeOut(tween(if (settings.reduceMotion) 100 else 180))
                         },
                         popTransitionSpec = {
-                            fadeIn(tween(if (settings.reduceMotion) 100 else 280)) togetherWith
-                                fadeOut(tween(if (settings.reduceMotion) 100 else 180))
+                            fadeIn(
+                                tween(
+                                    if (settings.reduceMotion) 100 else 190,
+                                    delayMillis = if (settings.reduceMotion) 0 else 90,
+                                ),
+                            ) togetherWith fadeOut(tween(if (settings.reduceMotion) 100 else 90))
                         },
                         predictivePopTransitionSpec = { edge ->
                             if (settings.reduceMotion) {
@@ -343,7 +347,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                             transformOrigin =
                                                 TransformOrigin(if (direction > 0) 0f else 1f, .5f),
                                         ) +
-                                        fadeOut(tween(280), targetAlpha = .72f))
+                                        fadeOut(tween(180)))
                             }
                         },
                         entryProvider =
@@ -366,6 +370,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                     ) {
                                         Box(
                                             Modifier.fillMaxSize()
+                                                .background(Ink)
                                                 .padding(
                                                     bottom =
                                                         if (destination.page == "player") 0.dp
@@ -387,7 +392,13 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                         DetailPage(
                                                             it,
                                                             model,
-                                                            { stack.removeAt(stack.lastIndex) },
+                                                            {
+                                                                if (
+                                                                    stack.lastOrNull() ==
+                                                                        destination
+                                                                )
+                                                                    stack.removeAt(stack.lastIndex)
+                                                            },
                                                             { push(Route("player")) },
                                                         )
                                                     }
@@ -897,7 +908,7 @@ private fun DetailPage(
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
-    if (information) InfoDialog(detail, model) { information = false }
+    if (information) InfoDialog(detail, model, onRemoved = back) { information = false }
     attachment?.let { AttachmentDialog(it, model) { attachment = null } }
 }
 
@@ -1010,13 +1021,58 @@ private fun AttachmentDialog(
 }
 
 @Composable
-private fun InfoDialog(detail: WorkDetails, model: AppViewModel, dismiss: () -> Unit) {
-    var title by remember { mutableStateOf(detail.work.title) }
-    var artist by remember { mutableStateOf(detail.work.artist) }
+private fun InfoDialog(
+    detail: WorkDetails,
+    model: AppViewModel,
+    onRemoved: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    var title by remember(detail.work.title) { mutableStateOf(detail.work.title) }
+    var artist by remember(detail.work.artist) { mutableStateOf(detail.work.artist) }
+    var confirmingRemoval by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val cover =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let { model.action { model.repository.setCover(detail.work, it) } }
         }
+    if (confirmingRemoval) {
+        AlertDialog(
+            onDismissRequest = { if (!loading) confirmingRemoval = false },
+            containerColor = Surface,
+            title = { Text("删除作品") },
+            text = { Text("删除该作品及其下载、书签和播放进度。") },
+            confirmButton = {
+                TextButton(
+                    enabled = !loading,
+                    onClick = {
+                        loading = true
+                        scope.launch {
+                            try {
+                                model.removeAsmrWork(detail)
+                                dismiss()
+                                onRemoved()
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                model.error.value = e.message ?: "删除失败"
+                            } finally {
+                                loading = false
+                            }
+                        }
+                    },
+                ) {
+                    Text(if (loading) "删除中" else "删除", color = Rose)
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !loading, onClick = { confirmingRemoval = false }) {
+                    Text("取消")
+                }
+            },
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text("作品信息") },
@@ -1026,8 +1082,31 @@ private fun InfoDialog(detail: WorkDetails, model: AppViewModel, dismiss: () -> 
                 OutlinedTextField(title, { title = it }, label = { Text("作品名") })
                 OutlinedTextField(artist, { artist = it }, label = { Text("声优") })
                 TextButton(onClick = { cover.launch(arrayOf("image/*")) }) { Text("更换封面") }
+                if (detail.work.rj != null)
+                    TextButton(
+                        enabled = !loading,
+                        onClick = {
+                            loading = true
+                            scope.launch {
+                                try {
+                                    model.repository.updateDlsiteMetadata(detail.work.id)
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    model.error.value = e.message ?: "元数据更新失败"
+                                } finally {
+                                    loading = false
+                                }
+                            }
+                        },
+                    ) {
+                        Text(if (loading) "读取中" else "更新 DLsite 元数据")
+                    }
+                if (isAsmrOneWork(detail.work))
+                    TextButton(enabled = !loading, onClick = { confirmingRemoval = true }) {
+                        Text("删除作品", color = Rose)
+                    }
                 detail.work.rj?.let { Text(it, color = Muted) }
-                Text(detail.work.originalTitle, fontSize = 13.sp, color = Muted)
             }
         },
         confirmButton = {

@@ -22,8 +22,8 @@ android {
         applicationId = "app.whisp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.4.0-rc.1"
+        versionCode = 12
+        versionName = "0.4.0-rc.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         if (!splitApks) ndk { abiFilters += supportedAbis }
     }
@@ -74,6 +74,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
+    sourceSets.named("androidTest") { assets.srcDir("$projectDir/schemas") }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
@@ -111,6 +112,7 @@ dependencies {
     implementation("com.squareup.okio:okio:3.18.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jsoup:jsoup:1.23.2")
     implementation("com.hierynomus:smbj:0.15.0")
     val media3 = "1.11.1"
     implementation("androidx.media3:media3-exoplayer:$media3")

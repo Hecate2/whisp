@@ -28,6 +28,8 @@ data class WorkEntity(
     val favorite: Boolean = false,
     val addedAt: Long = System.currentTimeMillis(),
     val offlineAttachments: Boolean = false,
+    @ColumnInfo(defaultValue = "''") val originalArtist: String = "",
+    @ColumnInfo(defaultValue = "NULL") val coverUrl: String? = null,
 )
 
 @Entity(tableName = "tracks", indices = [Index("workId")])
@@ -116,6 +118,9 @@ interface LibraryDao {
 
     @Query("SELECT * FROM works WHERE id = :id") suspend fun work(id: String): WorkEntity?
 
+    @Query("SELECT * FROM works WHERE coverId = :id LIMIT 1")
+    suspend fun workByCover(id: String): WorkEntity?
+
     @Query("SELECT * FROM works") suspend fun allWorks(): List<WorkEntity>
 
     @Query("SELECT id FROM attachments WHERE kind = 'image'")
@@ -152,6 +157,21 @@ interface LibraryDao {
 
     @Query("DELETE FROM attachments WHERE workId = :workId")
     suspend fun deleteWorkAttachments(workId: String)
+
+    @Query(
+        "DELETE FROM locations WHERE assetId IN (SELECT id FROM tracks WHERE workId = :workId UNION SELECT id FROM attachments WHERE workId = :workId UNION SELECT coverId FROM works WHERE id = :workId)",
+    )
+    suspend fun deleteWorkLocations(workId: String)
+
+    @Query("DELETE FROM tracks WHERE workId = :workId") suspend fun deleteWorkTracks(workId: String)
+
+    @Query("DELETE FROM works WHERE id = :workId") suspend fun deleteWork(workId: String)
+
+    @Query("DELETE FROM progress WHERE workId = :workId")
+    suspend fun deleteWorkProgress(workId: String)
+
+    @Query("DELETE FROM bookmarks WHERE workId = :workId")
+    suspend fun deleteWorkBookmarks(workId: String)
 
     @Query("SELECT * FROM tracks WHERE id = :id") suspend fun track(id: String): TrackEntity?
 
@@ -194,7 +214,8 @@ interface LibraryDao {
             ProgressEntity::class,
             BookmarkEntity::class,
         ],
-    version = 1,
+    version = 2,
+    autoMigrations = [AutoMigration(from = 1, to = 2)],
     exportSchema = true,
 )
 abstract class LibraryDatabase : RoomDatabase() {

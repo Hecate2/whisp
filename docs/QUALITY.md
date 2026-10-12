@@ -63,6 +63,8 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 
 ASMR.ONE 使用公开的作品列表、搜索、作品信息和曲目接口；端点见 `AsmrOneClient`。Paging 3 负责分页、缓存、取消与重试，JSON 使用 kotlinx.serialization 解析。作品信息在用户打开作品时写入 Room，来源更新刷新已加入的作品。
 
+RJ 作品元数据由 `DlsiteClient` 读取 DLsite 官方 `maniax/product/info/ajax` 与作品页。Jsoup 1.23.2 负责 HTML 解析，标题、声优、系列和封面写入统一作品实体；元数据请求使用独立网络客户端。Room 自动迁移保留已有作品、下载状态、书签和进度，官方原始声优用于区分后续手动编辑。
+
 在线媒体使用 `whisp-asmr` 位置标识与独立 HTTP 数据源，播放、字幕及下载共享同一地址映射。作品 ID 由站点编号建立，曲目与资料 ID 由作品和相对路径建立。位置 ID 包含来源、媒体 ID 与 URL，使多个媒体可以共用同一文件地址。刷新保留标题编辑、收藏、书签和播放进度。
 
 独立设备测试在 `smoke` 规则中保留 MockWebServer 使用的 OkHttp / Okio 类边界；正式 Release 使用常规 R8 裁剪规则。

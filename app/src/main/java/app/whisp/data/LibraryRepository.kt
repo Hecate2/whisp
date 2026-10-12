@@ -64,6 +64,8 @@ class LibraryRepository(val context: Context) {
             .build()
     val dav = WebDavClient(http)
     private val onlineHttp = http.newBuilder().followRedirects(true).build()
+    private val onlineWorkChanges = Mutex()
+    val dlsite = DlsiteClient(onlineHttp)
 
     private fun asmrClient(source: SourceEntity): AsmrOneClient {
         require(source.kind == "asmrone") { "来源类型不匹配" }
@@ -84,7 +86,10 @@ class LibraryRepository(val context: Context) {
         ProgressWriter(
             scope,
             {
-                dao.saveProgress(it)
+                database.withTransaction {
+                    if (dao.work(it.workId) != null && dao.track(it.trackId)?.workId == it.workId)
+                        dao.saveProgress(it)
+                }
                 storageChanged()
             },
             { Log.w("WhispProgress", "Progress write deferred: ${it.javaClass.simpleName}") },
@@ -345,6 +350,8 @@ class LibraryRepository(val context: Context) {
 
     fun headers(uri: String): Map<String, String> {
         val url = uri.toHttpUrlOrNull() ?: return emptyMap()
+        if (listOf("dlsite.com", "dlsite.jp").any { url.host == it || url.host.endsWith(".$it") })
+            return mapOf("Referer" to "https://www.dlsite.com/")
         val knownSources = sources.value.ifEmpty { runBlocking(Dispatchers.IO) { dao.sources() } }
         val source =
             knownSources.firstOrNull { source ->
@@ -456,57 +463,180 @@ class LibraryRepository(val context: Context) {
         return asmrClient(source).catalog(page, query.text, query.order, query.subtitlesOnly)
     }
 
-    suspend fun importAsmrWork(sourceId: String, id: Long): String {
-        val source = dao.source(sourceId) ?: error("来源已移除")
-        val client = asmrClient(source)
-        val work = client.work(id)
-        require(work.id == id) { "作品编号不匹配" }
-        val generation = System.currentTimeMillis()
-        val indexed = client.index(work, sourceId, generation)
-        currentCoroutineContext().ensureActive()
-        database.withTransaction {
-            val latestSource = dao.source(sourceId) ?: error("来源已移除")
-            val old = dao.details(work.workId)
-            val newWork = indexed.works.single()
-            val savedWork =
-                old?.work?.let {
-                    newWork.copy(
-                        title = it.title,
-                        artist = it.artist,
-                        favorite = it.favorite,
-                        coverId = it.coverId ?: newWork.coverId,
-                        addedAt = it.addedAt,
-                        offlineAttachments = it.offlineAttachments,
-                    )
-                } ?: newWork
-            val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
-            val pinned =
-                oldTracks.values
-                    .filter {
-                        downloadManager.downloadIndex.getDownload(it.id)?.state ==
-                            Download.STATE_COMPLETED
+    suspend fun importAsmrWork(
+        sourceId: String,
+        id: Long,
+        metadataClient: DlsiteClient = dlsite,
+        existingOnly: Boolean = false,
+    ): String =
+        withContext(Dispatchers.IO) {
+            onlineWorkChanges.withLock {
+                val source = dao.source(sourceId) ?: error("来源已移除")
+                if (existingOnly && dao.work(stableId("asmr.one|work|$id")) == null)
+                    return@withLock stableId("asmr.one|work|$id")
+                val client = asmrClient(source)
+                val catalogWork = client.work(id)
+                require(catalogWork.id == id) { "作品编号不匹配" }
+                val work = metadataClient.work(catalogWork.rj).applyTo(catalogWork)
+                val generation = System.currentTimeMillis()
+                val indexed = client.index(work, sourceId, generation)
+                val previous = dao.work(work.workId)
+                if (previous?.offlineAttachments == true)
+                    work.coverId?.let { cover ->
+                        val target = File(offlineDir, cover)
+                        if (!target.isFile)
+                            atomicFile(target, client.bytes(work.coverUrl!!, 16 * 1024 * 1024))
                     }
-                    .map { it.id }
-            dao.deleteWorkSourceLocations(work.workId, sourceId)
-            dao.putWorks(listOf(savedWork))
-            dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
-            if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
-            dao.putTracks(
-                indexed.tracks.map { track ->
-                    track.copy(
-                        durationMs =
-                            track.durationMs.takeIf { it > 0 }
-                                ?: oldTracks[track.id]?.durationMs
-                                ?: 0,
+                currentCoroutineContext().ensureActive()
+                database.withTransaction {
+                    val latestSource = dao.source(sourceId) ?: error("来源已移除")
+                    val old = dao.details(work.workId)
+                    val newWork = indexed.works.single()
+                    val savedWork =
+                        old?.work?.let {
+                            newWork.copy(
+                                title =
+                                    if (it.title != it.originalTitle) it.title else newWork.title,
+                                artist =
+                                    if (
+                                        it.artist !=
+                                            it.originalArtist.ifBlank { catalogWork.artist }
+                                    )
+                                        it.artist
+                                    else newWork.artist,
+                                favorite = it.favorite,
+                                coverId =
+                                    it.coverId?.takeIf { cover ->
+                                        cover == stableId("${it.id}|custom-cover")
+                                    } ?: newWork.coverId,
+                                addedAt = it.addedAt,
+                                offlineAttachments = it.offlineAttachments,
+                            )
+                        } ?: newWork
+                    val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
+                    val pinned =
+                        oldTracks.values
+                            .filter {
+                                downloadManager.downloadIndex.getDownload(it.id)?.state ==
+                                    Download.STATE_COMPLETED
+                            }
+                            .map { it.id }
+                    dao.deleteWorkSourceLocations(work.workId, sourceId)
+                    dao.putWorks(listOf(savedWork))
+                    dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
+                    if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
+                    dao.putTracks(
+                        indexed.tracks.map { track ->
+                            track.copy(
+                                durationMs =
+                                    track.durationMs.takeIf { it > 0 }
+                                        ?: oldTracks[track.id]?.durationMs
+                                        ?: 0,
+                            )
+                        },
                     )
-                },
-            )
-            dao.putAttachments(indexed.attachments)
-            dao.putLocations(indexed.locations)
-            dao.putSource(latestSource.copy(lastScan = generation, error = null))
+                    dao.putAttachments(indexed.attachments)
+                    dao.putLocations(indexed.locations)
+                    dao.putSource(latestSource.copy(lastScan = generation, error = null))
+                }
+                storageChanged()
+                work.workId
+            }
         }
-        storageChanged()
-        return work.workId
+
+    suspend fun updateDlsiteMetadata(id: String, client: DlsiteClient = dlsite) =
+        withContext(Dispatchers.IO) {
+            onlineWorkChanges.withLock {
+                val old = dao.work(id) ?: error("作品已删除")
+                val metadata = client.work(old.rj ?: error("作品没有 RJ 编号"))
+                val coverId = stableId("$id|${metadata.coverPath}")
+                val coverUrl = metadata.coverUrl.toHttpUrlOrNull() ?: error("封面地址无效")
+                val bytes =
+                    onlineHttp.onlineBytes(
+                        okhttp3.Request.Builder()
+                            .url(coverUrl)
+                            .header("Referer", "https://www.dlsite.com/")
+                            .build(),
+                        16 * 1024 * 1024,
+                    )
+                cacheArtwork(coverId, bytes)
+                if (old.offlineAttachments) atomicFile(File(offlineDir, coverId), bytes)
+                database.withTransaction {
+                    val latest = dao.work(id) ?: error("作品已删除")
+                    dao.putWorks(
+                        listOf(
+                            latest.copy(
+                                title = metadata.title,
+                                originalTitle = metadata.title,
+                                artist = metadata.artist,
+                                originalArtist = metadata.artist,
+                                series = metadata.series,
+                                coverUrl = metadata.coverUrl,
+                                coverId =
+                                    latest.coverId?.takeIf { it == stableId("$id|custom-cover") }
+                                        ?: coverId,
+                            ),
+                        ),
+                    )
+                }
+                artworkRevision.update { it + 1 }
+                storageChanged()
+            }
+        }
+
+    suspend fun removeAsmrWork(id: String) {
+        // Cancel the attachment worker before waiting for its mutation lock.
+        WorkManager.getInstance(context).cancelUniqueWork("attachments-$id")
+        onlineWorkChanges.withLock {
+            withContext(Dispatchers.IO + NonCancellable) {
+                val detail = dao.details(id) ?: return@withContext
+                require(isAsmrOneWork(detail.work)) { "作品类型不支持此操作" }
+                flushPlaybackProgress()
+                val assets =
+                    (detail.tracks.map { it.id } +
+                            detail.attachments.map { it.id } +
+                            listOfNotNull(detail.work.coverId))
+                        .toSet()
+                database.withTransaction {
+                    dao.deleteWorkLocations(id)
+                    dao.deleteWorkTracks(id)
+                    dao.deleteWorkAttachments(id)
+                    dao.deleteWorkProgress(id)
+                    dao.deleteWorkBookmarks(id)
+                    dao.deleteWork(id)
+                }
+                val requests =
+                    synchronized(imageRequests) {
+                        assets.flatMap { asset ->
+                            listOfNotNull(
+                                imageRequests["cover:$asset"],
+                                imageRequests["preview:$asset"],
+                            )
+                        }
+                    }
+                requests.forEach { it.cancelAndJoin() }
+                detail.tracks.forEach { track ->
+                    DownloadService.sendRemoveDownload(
+                        context,
+                        OfflineService::class.java,
+                        track.id,
+                        false,
+                    )
+                    streamingCache.removeResource(track.id)
+                }
+                imageWrites.withLock {
+                    assets.forEach { asset ->
+                        File(offlineDir, asset).delete()
+                        File(customArtworkDir, asset).delete()
+                        File(artworkDir, asset).delete()
+                        artworkCache.remove(asset)
+                        previewCache.remove(asset)
+                    }
+                }
+                artworkRevision.update { it + 1 }
+                storageChanged()
+            }
+        }
     }
 
     suspend fun ensureCatalogArtwork(id: String, url: String, sourceId: String): File? =
@@ -541,7 +671,7 @@ class LibraryRepository(val context: Context) {
                 for (workId in dao.sourceWorkIds(source.id)) {
                     currentCoroutineContext().ensureActive()
                     val id = dao.work(workId)?.rj?.removePrefix("RJ")?.toLongOrNull() ?: continue
-                    importAsmrWork(source.id, id)
+                    importAsmrWork(source.id, id, existingOnly = true)
                 }
                 dao.source(source.id)?.let {
                     dao.putSource(it.copy(lastScan = System.currentTimeMillis(), error = null))
@@ -573,8 +703,14 @@ class LibraryRepository(val context: Context) {
                             new.copy(
                                 title = old.title,
                                 artist = old.artist,
+                                originalTitle =
+                                    if (old.coverUrl != null) old.originalTitle
+                                    else new.originalTitle,
+                                series = if (old.coverUrl != null) old.series else new.series,
                                 favorite = old.favorite,
                                 coverId = old.coverId ?: new.coverId,
+                                coverUrl = old.coverUrl,
+                                originalArtist = old.originalArtist,
                                 addedAt = old.addedAt,
                                 offlineAttachments = old.offlineAttachments,
                             )
@@ -741,7 +877,7 @@ class LibraryRepository(val context: Context) {
         val location =
             options.firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
                 ?: options.firstOrNull()
-                ?: throw IOException("文件已移动或来源已移除")
+                ?: return dao.workByCover(id)?.coverUrl ?: throw IOException("文件已移动或来源已移除")
         return if (dao.source(location.sourceId)?.kind == "asmrone")
             "whisp-asmr://${location.sourceId}/$id"
         else location.uri
@@ -763,7 +899,7 @@ class LibraryRepository(val context: Context) {
         imageRequest("cover:$id") {
             storageReady.await()
             artwork(id)
-                ?: if (dao.locations(id).isEmpty()) null
+                ?: if (dao.locations(id).isEmpty() && dao.workByCover(id)?.coverUrl == null) null
                 else {
                     cacheArtwork(id, readAsset(id, 16 * 1024 * 1024)).also {
                         artworkRevision.update { it + 1 }
@@ -881,6 +1017,18 @@ class LibraryRepository(val context: Context) {
 
     suspend fun readAsset(id: String, limit: Int = 8 * 1024 * 1024): ByteArray =
         withContext(Dispatchers.IO) {
+            val offline = File(offlineDir, id)
+            if (offline.isFile)
+                return@withContext offline.inputStream().use { boundedRead(it, limit) }
+            dao.workByCover(id)?.coverUrl?.let { url ->
+                return@withContext onlineHttp.onlineBytes(
+                    okhttp3.Request.Builder()
+                        .url(url)
+                        .header("Referer", "https://www.dlsite.com/")
+                        .build(),
+                    limit,
+                )
+            }
             val uri = resolve(id).toUri()
             when (uri.scheme) {
                 "content",
@@ -947,8 +1095,8 @@ class LibraryRepository(val context: Context) {
             .build()
     }
 
-    suspend fun downloadWork(id: String) {
-        val detail = dao.details(id) ?: return
+    suspend fun downloadWork(id: String) = onlineWorkChanges.withLock {
+        val detail = dao.details(id) ?: return@withLock
         require(detail.tracks.isNotEmpty()) { "作品没有音轨" }
         for (track in detail.tracks) {
             val uri = resolve(track.id)
@@ -966,8 +1114,8 @@ class LibraryRepository(val context: Context) {
             )
     }
 
-    suspend fun downloadAttachments(id: String) {
-        val detail = dao.details(id) ?: return
+    suspend fun downloadAttachments(id: String) = onlineWorkChanges.withLock {
+        val detail = dao.details(id) ?: return@withLock
         detail.attachments.forEach { attachment ->
             val file = File(offlineDir, attachment.id)
             if (!file.isFile) atomicFile(file, readAsset(attachment.id, 64 * 1024 * 1024))

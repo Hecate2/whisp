@@ -119,6 +119,11 @@ internal class ImageFileCache(
     }
 
     @Synchronized
+    fun remove(id: String) {
+        if (File(directory, id).delete()) changed()
+    }
+
+    @Synchronized
     fun size() = directory.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
 
     @Synchronized
