@@ -67,6 +67,267 @@ class LibraryRepository(val context: Context) {
     private val onlineHttp = http.newBuilder().followRedirects(true).build()
     private val onlineWorkChanges = Mutex()
     val dlsite = DlsiteClient(onlineHttp)
+    val dlsiteDiagnostics = DlsiteDiagnostics(context)
+    private val dlsiteClients =
+        java.util.concurrent.ConcurrentHashMap<String, DlsiteAccountClient>()
+    private val dlsiteCookieWrites = Mutex()
+
+    private suspend fun dlsiteAccount(sourceId: String): DlsiteAccountClient =
+        dlsiteCookieWrites.withLock {
+            dlsiteClients[sourceId]?.let {
+                return@withLock it
+            }
+            val source = dao.source(sourceId) ?: throw IOException("来源已移除")
+            require(source.kind == "dlsite") { "来源类型不匹配" }
+            if (source.secret.isBlank()) throw DlsiteLoginRequired()
+            lateinit var session: DlsiteSession
+            session =
+                DlsiteSession(secrets.decrypt(source.secret)) {
+                    scope.launch {
+                        dlsiteCookieWrites.withLock {
+                            dao.source(sourceId)
+                                ?.takeIf {
+                                    it.kind == "dlsite" &&
+                                        dlsiteClients[sourceId]?.session === session
+                                }
+                                ?.let {
+                                    dao.updateSourceSecret(it.id, secrets.encrypt(session.encode()))
+                                }
+                        }
+                    }
+                }
+            val created = DlsiteAccountClient(session, http, diagnostic = dlsiteDiagnostics::record)
+            dlsiteClients.putIfAbsent(sourceId, created) ?: created
+        }
+
+    suspend fun acceptDlsiteLogin(snapshot: String, expectedSource: String? = null): String {
+        val session = DlsiteSession(snapshot)
+        val account =
+            DlsiteAccountClient(session, http, diagnostic = dlsiteDiagnostics::record).authorize()
+        val id = account.id
+        require(expectedSource == null || expectedSource == id) { "请登录该来源对应的账号" }
+        dlsiteCookieWrites.withLock {
+            val previous = dao.source(id)
+            dlsiteClients.remove(id)?.session?.clear()
+            val number = dao.sources().count { it.kind == "dlsite" }
+            dao.putSource(
+                (previous
+                        ?: SourceEntity(
+                            id,
+                            if (number == 0) "DLsite" else "DLsite ${number + 1}",
+                            "dlsite",
+                            "https://play.dlsite.com/",
+                        ))
+                    .copy(
+                        secret = secrets.encrypt(session.encode()),
+                        error = null,
+                    ),
+            )
+        }
+        scheduleScan(id)
+        return id
+    }
+
+    fun dlsitePurchases(sourceId: String): Flow<List<DlsiteOwnedWork>> =
+        dao.observeDlsitePurchases(sourceId)
+            .map { rows -> rows.mapNotNull { decodeOwnedWork(it.snapshot) } }
+            .flowOn(Dispatchers.Default)
+
+    suspend fun syncDlsitePurchases(sourceId: String, full: Boolean = false) {
+        val source = dao.source(sourceId) ?: error("来源已移除")
+        val synced = dlsiteAccount(sourceId).purchases(if (full) 0 else source.lastScan)
+        database.withTransaction {
+            val latest = dao.source(sourceId) ?: error("来源已移除")
+            dao.putDlsitePurchases(
+                synced.works.map {
+                    val old =
+                        decodeOwnedWork(dao.dlsitePurchase(sourceId, it.workno)?.snapshot.orEmpty())
+                    val merged =
+                        it.copy(
+                            artist = it.artist.ifBlank { old?.artist.orEmpty() },
+                            circle = it.circle.ifBlank { old?.circle.orEmpty() },
+                            coverUrl = it.coverUrl ?: old?.coverUrl,
+                            purchasedAt =
+                                it.purchasedAt.takeIf { date -> date > 0 } ?: old?.purchasedAt ?: 0,
+                            metadataReady = old?.metadataReady == true,
+                        )
+                    DlsitePurchaseEntity(
+                        sourceId,
+                        merged.workno,
+                        merged.purchasedAt,
+                        merged.encode(),
+                    )
+                },
+            )
+            dao.putSource(latest.copy(lastScan = synced.completedAt, error = null))
+        }
+        enrichDlsiteCatalog(sourceId)
+    }
+
+    private suspend fun enrichDlsiteCatalog(sourceId: String) = coroutineScope {
+        val pending = dlsitePurchases(sourceId).first().filter { !it.metadataReady }
+        val lanes = Semaphore(2)
+        pending
+            .map { owned ->
+                async {
+                    lanes.withPermit {
+                        val metadata =
+                            try {
+                                dlsite.work(owned.workno)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                return@withPermit
+                            }
+                        val voices =
+                            metadata.details.credits
+                                .filter { it.role == "voice_by" }
+                                .joinToString(" / ") { it.name }
+                        database.withTransaction {
+                            if (dao.source(sourceId) == null) return@withTransaction
+                            val current =
+                                decodeOwnedWork(
+                                    dao.dlsitePurchase(sourceId, owned.workno)?.snapshot.orEmpty(),
+                                ) ?: return@withTransaction
+                            val enriched =
+                                current.copy(
+                                    title = metadata.title,
+                                    artist = voices.ifBlank { current.artist },
+                                    circle = metadata.details.circle ?: current.circle,
+                                    coverUrl = metadata.coverUrl,
+                                    metadataReady = metadata.details.completeProduct,
+                                )
+                            dao.putDlsitePurchases(
+                                listOf(
+                                    DlsitePurchaseEntity(
+                                        sourceId,
+                                        enriched.workno,
+                                        enriched.purchasedAt,
+                                        enriched.encode(),
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            .awaitAll()
+    }
+
+    suspend fun importDlsiteWork(
+        sourceId: String,
+        workno: String,
+        refresh: Boolean = false,
+    ): WorkDetails =
+        withContext(Dispatchers.IO) {
+            onlineWorkChanges.withLock {
+                val cached =
+                    decodeOwnedWork(dao.dlsitePurchase(sourceId, workno)?.snapshot.orEmpty())
+                val client = dlsiteAccount(sourceId)
+                val work = cached ?: client.work(workno)
+                val workId = work.entity(sourceId).id
+                if (!refresh)
+                    dao.details(workId)
+                        ?.takeIf { it.tracks.isNotEmpty() && workId in dao.sourceWorkIds(sourceId) }
+                        ?.let {
+                            return@withLock it
+                        }
+                val indexed = client.index(work, sourceId, System.currentTimeMillis())
+                val metadata =
+                    try {
+                        dlsite.work(workno).withPrevious(readDlsiteDetails(workId))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                database.withTransaction {
+                    require(dao.source(sourceId)?.kind == "dlsite") { "来源已移除" }
+                    val old = dao.details(workId)
+                    val base = indexed.works.single()
+                    val fresh =
+                        metadata?.let {
+                            base.copy(
+                                title = it.title,
+                                originalTitle = it.title,
+                                artist = it.artist,
+                                originalArtist = it.artist,
+                                coverId = stableId("dlsite-cover|${it.coverUrl}"),
+                                coverUrl = it.coverUrl,
+                                series = it.series,
+                            )
+                        } ?: base
+                    val saved =
+                        old?.work?.let {
+                            fresh.copy(
+                                title = if (it.title != it.originalTitle) it.title else fresh.title,
+                                artist =
+                                    if (it.artist != it.originalArtist) it.artist else fresh.artist,
+                                favorite = it.favorite,
+                                coverId =
+                                    it.coverId?.takeIf { cover ->
+                                        cover == stableId("${it.id}|custom-cover")
+                                    } ?: fresh.coverId,
+                                addedAt = it.addedAt,
+                                offlineAttachments = it.offlineAttachments,
+                            )
+                        } ?: fresh
+                    dao.putWorks(listOf(saved))
+                    dao.putDlsitePurchases(
+                        listOf(
+                            DlsitePurchaseEntity(
+                                sourceId,
+                                workno,
+                                work.purchasedAt,
+                                work
+                                    .copy(
+                                        title = fresh.originalTitle,
+                                        artist = fresh.originalArtist,
+                                        coverUrl = fresh.coverUrl,
+                                        metadataReady =
+                                            metadata?.details?.completeProduct == true ||
+                                                work.metadataReady,
+                                    )
+                                    .encode(),
+                            ),
+                        ),
+                    )
+                    dao.deleteWorkSourceLocations(workId, sourceId)
+                    val pinned =
+                        old?.tracks
+                            .orEmpty()
+                            .filter { downloads.value[it.id]?.state == Download.STATE_COMPLETED }
+                            .map { it.id }
+                    dao.deleteStaleTracks(workId, indexed.tracks.map { it.id } + pinned)
+                    dao.putTracks(indexed.tracks)
+                    dao.putAttachments(indexed.attachments)
+                    dao.putLocations(indexed.locations)
+                    metadata?.details?.let {
+                        dao.putDlsiteMetadata(
+                            DlsiteMetadataEntity(
+                                workId,
+                                it.preserving(readDlsiteDetails(workId)).encode(),
+                            ),
+                        )
+                    }
+                }
+                storageChanged()
+                dao.details(workId) ?: error("作品保存失败")
+            }
+        }
+
+    private suspend fun dlsiteResource(sourceId: String, assetId: String): DlsiteMediaResource {
+        val location =
+            dao.locations(assetId).firstOrNull { it.sourceId == sourceId }
+                ?: throw IOException("文件已移除")
+        val uri = location.uri.toUri()
+        require(uri.scheme == "dlsite-resource") { "DLsite 文件标识无效" }
+        return DlsiteMediaResource(
+            dlsiteAccount(sourceId),
+            uri.authority ?: error("作品编号无效"),
+            uri.path.orEmpty().removePrefix("/"),
+        )
+    }
 
     private fun asmrClient(source: SourceEntity): AsmrOneClient {
         require(source.kind == "asmrone") { "来源类型不匹配" }
@@ -183,6 +444,10 @@ class LibraryRepository(val context: Context) {
             require(source.kind == "smb") { "来源类型不匹配" }
             smb.open(source, secrets.decrypt(source.secret), uri)
         }
+        val dlsiteData =
+            DlsiteDataSource(::dlsiteResource) { sourceId ->
+                scope.launch { dao.updateSourceError(sourceId, "请重新登录 DLsite") }
+            }
         object : DataSource {
             private var active: DataSource = fallback
 
@@ -190,6 +455,7 @@ class LibraryRepository(val context: Context) {
                 fallback.addTransferListener(listener)
                 smbData.addTransferListener(listener)
                 online.addTransferListener(listener)
+                dlsiteData.addTransferListener(listener)
             }
 
             override fun open(spec: DataSpec): Long {
@@ -197,6 +463,7 @@ class LibraryRepository(val context: Context) {
                     when (spec.uri.scheme) {
                         "whisp-smb" -> smbData
                         "whisp-asmr" -> online
+                        "whisp-dlsite" -> dlsiteData
                         else -> fallback
                     }
                 return active.open(spec)
@@ -274,7 +541,16 @@ class LibraryRepository(val context: Context) {
                 ) {
                     downloadRefresh.trySend(Unit)
                     storageChanged()
-                    finalException?.let { messages.tryEmit("下载失败，可在来源页重试") }
+                    finalException?.let {
+                        messages.tryEmit(
+                            if (
+                                generateSequence<Throwable>(it) { cause -> cause.cause }
+                                    .any { cause -> cause is DlsiteLoginRequired }
+                            )
+                                "DLsite 登录已过期，请在来源页重新登录"
+                            else "下载失败，可在来源页重试",
+                        )
+                    }
                 }
 
                 override fun onDownloadRemoved(manager: DownloadManager, download: Download) {
@@ -726,7 +1002,9 @@ class LibraryRepository(val context: Context) {
         onlineWorkChanges.withLock {
             withContext(Dispatchers.IO + NonCancellable) {
                 val detail = dao.details(id) ?: return@withContext
-                require(isAsmrOneWork(detail.work)) { "作品类型不支持此操作" }
+                require(isAsmrOneWork(detail.work) || detail.work.origin == "dlsite") {
+                    "作品类型不支持此操作"
+                }
                 flushPlaybackProgress()
                 val assets =
                     (detail.tracks.map { it.id } +
@@ -780,9 +1058,21 @@ class LibraryRepository(val context: Context) {
             storageReady.await()
             val source = dao.source(sourceId) ?: error("来源已移除")
             artwork(id)
-                ?: cacheArtwork(id, asmrClient(source).bytes(url, 16 * 1024 * 1024)).also {
-                    artworkRevision.update { it + 1 }
-                }
+                ?: cacheArtwork(
+                        id,
+                        if (source.kind == "dlsite")
+                            onlineHttp.onlineBytes(
+                                okhttp3.Request.Builder()
+                                    .url(url)
+                                    .header("Referer", "https://www.dlsite.com/")
+                                    .build(),
+                                16 * 1024 * 1024,
+                            )
+                        else asmrClient(source).bytes(url, 16 * 1024 * 1024),
+                    )
+                    .also {
+                        artworkRevision.update { it + 1 }
+                    }
         }
 
     fun scheduleScan(id: String) {
@@ -803,6 +1093,10 @@ class LibraryRepository(val context: Context) {
         val startTime = android.os.SystemClock.elapsedRealtime()
         try {
             Log.i("WhispScan", "Started ${source.kind} scan")
+            if (source.kind == "dlsite") {
+                syncDlsitePurchases(source.id)
+                return
+            }
             if (source.kind == "asmrone") {
                 for (workId in dao.sourceWorkIds(source.id)) {
                     currentCoroutineContext().ensureActive()
@@ -994,9 +1288,33 @@ class LibraryRepository(val context: Context) {
 
     suspend fun removeSource(id: String) {
         WorkManager.getInstance(context).cancelUniqueWork("scan-$id")
-        database.withTransaction {
-            dao.deleteSourceLocations(id)
-            dao.deleteSource(id)
+        if (dao.source(id)?.kind == "dlsite") {
+            for (workId in dao.sourceWorkIds(id)) {
+                WorkManager.getInstance(context).cancelUniqueWork("attachments-$workId")
+                dao.details(workId)
+                    ?.tracks
+                    .orEmpty()
+                    .onEach { streamingCache.removeResource(it.id) }
+                    .filter { downloads.value[it.id]?.state != Download.STATE_COMPLETED }
+                    .forEach {
+                        DownloadService.sendRemoveDownload(
+                            context,
+                            OfflineService::class.java,
+                            it.id,
+                            false,
+                        )
+                    }
+            }
+        }
+        dlsiteCookieWrites.withLock {
+            dlsiteClients.remove(id)?.let {
+                it.session.clear()
+                it.http.dispatcher.cancelAll()
+            }
+            database.withTransaction {
+                dao.deleteSourceLocations(id)
+                dao.deleteSource(id)
+            }
         }
     }
 
@@ -1014,9 +1332,11 @@ class LibraryRepository(val context: Context) {
             options.firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
                 ?: options.firstOrNull()
                 ?: return dao.workByCover(id)?.coverUrl ?: throw IOException("文件已移动或来源已移除")
-        return if (dao.source(location.sourceId)?.kind == "asmrone")
-            "whisp-asmr://${location.sourceId}/$id"
-        else location.uri
+        return when (dao.source(location.sourceId)?.kind) {
+            "asmrone" -> "whisp-asmr://${location.sourceId}/$id"
+            "dlsite" -> "whisp-dlsite://${location.sourceId}/$id"
+            else -> location.uri
+        }
     }
 
     fun artwork(id: String?): File? = id?.let { asset ->
@@ -1177,6 +1497,10 @@ class LibraryRepository(val context: Context) {
                             ?: error("来源已移除")
                     val source = dao.source(location.sourceId) ?: error("来源已移除")
                     asmrClient(source).bytes(location.uri, limit)
+                }
+                "whisp-dlsite" -> {
+                    val resource = dlsiteResource(uri.authority ?: error("来源已移除"), id)
+                    resource.client.resourceBytes(resource.workno, resource.path, limit)
                 }
                 else -> {
                     val location =

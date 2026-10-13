@@ -559,6 +559,38 @@ class AppViewModel(
 
     fun download(id: String) = action { repository.downloadWork(id) }
 
+    fun removeSource(sourceId: String) = action {
+        if (repository.dao.source(sourceId)?.kind == "dlsite") {
+            val workIds = repository.dao.sourceWorkIds(sourceId).toSet()
+            if (openingWorkId in workIds) {
+                ++openingGeneration
+                openingJob?.cancelAndJoin()
+                openingWorkId = null
+                openingTrackId.value = null
+            }
+            val trackIds =
+                library.value
+                    .filter { it.work.id in workIds }
+                    .flatMap { it.tracks }
+                    .map { it.id }
+                    .toSet()
+            controller?.let { c ->
+                if (c.currentMediaItem?.mediaId in trackIds) {
+                    c.pause()
+                    c.stop()
+                    loadSubtitles(null)
+                }
+                for (index in c.mediaItemCount - 1 downTo 0) if (
+                    c.getMediaItemAt(index).mediaId in trackIds
+                )
+                    c.removeMediaItem(index)
+            }
+            trackIds.forEach { subtitleCache.remove(it) }
+        }
+        repository.removeSource(sourceId)
+        updatePlayer()
+    }
+
     suspend fun removeAsmrWork(detail: WorkDetails) {
         if (openingWorkId == detail.work.id) {
             ++openingGeneration

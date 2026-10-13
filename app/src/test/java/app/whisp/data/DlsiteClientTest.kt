@@ -10,6 +10,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DlsiteClientTest {
+    @Test
+    fun commercialVoiceUsesItsOfficialStoreAndBrandMetadata() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .body(
+                        """[{"product_id":"VJ00000001","work_name":"示例音声","brand_name":"示例品牌","image_main":{"url":"//img.dlsite.jp/example.jpg"}}]""",
+                    )
+                    .build(),
+            )
+            val result = DlsiteClient(OkHttpClient(), server.url("/")).work("VJ00000001")
+            assertEquals("示例品牌", result.details.circle)
+            assertEquals("/pro/api/=/product.json", server.takeRequest().url.encodedPath)
+            assertEquals(
+                "https://www.dlsite.com/pro/work/=/product_id/VJ00000001.html",
+                dlsiteWorkUrl(result.rj),
+            )
+        }
+    }
+
     private val info =
         """{"RJ00000001":{"product_id":"RJ00000001","work_name":"官方示例 &amp; 标题","maker_name":"示例社团","work_image":"//img.dlsite.jp/example.jpg","title_name":"示例系列"}}"""
     private val product =

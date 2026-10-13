@@ -15,6 +15,20 @@ import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 import org.jsoup.parser.Parser
 
+internal fun dlsiteShop(number: String) =
+    when {
+        number.startsWith("VJ") -> "pro"
+        number.startsWith("BJ") -> "books"
+        else -> "maniax"
+    }
+
+private val dlsiteWorkNumber = Regex("(?:RJ|VJ|BJ)[0-9]{6,8}")
+
+internal fun validDlsiteWorkno(number: String) = dlsiteWorkNumber.matches(number)
+
+fun dlsiteWorkUrl(number: String) =
+    "https://www.dlsite.com/${dlsiteShop(number)}/work/=/product_id/$number.html"
+
 data class DlsiteMetadata(
     val rj: String,
     val title: String,
@@ -48,11 +62,11 @@ class DlsiteClient(
 ) {
     suspend fun work(number: String): DlsiteMetadata {
         val rj = number.uppercase()
-        require(Regex("RJ[0-9]{6,8}").matches(rj)) { "RJ 编号无效" }
+        require(validDlsiteWorkno(rj)) { "作品编号无效" }
         val full =
             root
                 .newBuilder()
-                .addPathSegments("maniax/api/=/product.json")
+                .addPathSegments("${dlsiteShop(rj)}/api/=/product.json")
                 .addQueryParameter("workno", rj)
                 .addQueryParameter("locale", "ja_JP")
                 .build()
@@ -65,7 +79,7 @@ class DlsiteClient(
             val fallback =
                 root
                     .newBuilder()
-                    .addPathSegments("maniax/product/info/ajax")
+                    .addPathSegments("${dlsiteShop(rj)}/product/info/ajax")
                     .addQueryParameter("product_id", rj)
                     .addQueryParameter("locale", "ja_JP")
                     .build()
@@ -178,8 +192,7 @@ class DlsiteClient(
     private fun JsonObject.long(key: String): Long? =
         (get(key) as? JsonPrimitive)?.longOrNull?.takeIf { it >= 0 }
 
-    private fun rj(value: String?): String? =
-        value?.uppercase()?.takeIf { Regex("RJ[0-9]{6,8}").matches(it) }
+    private fun rj(value: String?): String? = value?.uppercase()?.takeIf(::validDlsiteWorkno)
 
     private fun languages(value: String): List<String> =
         value.split(',').map(String::trim).filter(String::isNotBlank).distinct().take(20)
@@ -228,8 +241,8 @@ class DlsiteClient(
         }
         return DlsiteDetails(
             rj = number,
-            circleId = item.optional("maker_id"),
-            circle = item.optional("maker_name"),
+            circleId = item.optional("maker_id") ?: item.optional("brand_id"),
+            circle = item.optional("maker_name") ?: item.optional("brand_name"),
             released =
                 item.optional("regist_date")?.take(10)?.takeIf {
                     runCatching { java.time.LocalDate.parse(it) }.isSuccess
@@ -294,11 +307,11 @@ class DlsiteClient(
     }
 
     suspend fun statistics(number: String): DlsiteStatistics {
-        val id = rj(number) ?: error("RJ 编号无效")
+        val id = rj(number) ?: error("作品编号无效")
         val url =
             root
                 .newBuilder()
-                .addPathSegments("maniax/product/info/ajax")
+                .addPathSegments("${dlsiteShop(id)}/product/info/ajax")
                 .addQueryParameter("product_id", id)
                 .addQueryParameter("locale", "ja_JP")
                 .build()
@@ -323,11 +336,11 @@ class DlsiteClient(
     }
 
     suspend fun description(number: String): List<DlsiteBlock> {
-        val id = rj(number) ?: error("RJ 编号无效")
+        val id = rj(number) ?: error("作品编号无效")
         val url =
             root
                 .newBuilder()
-                .addPathSegments("maniax/work/=/product_id")
+                .addPathSegments("${dlsiteShop(id)}/work/=/product_id")
                 .addPathSegment("$id.html")
                 .addQueryParameter("locale", "ja_JP")
                 .build()
@@ -339,7 +352,7 @@ class DlsiteClient(
         val document = Jsoup.parse(page, root.toString())
         require(document.selectFirst("#work_name") != null) { "DLsite 作品页不可用" }
         document.selectFirst("link[rel=canonical]")?.attr("href")?.let { canonical ->
-            Regex("RJ[0-9]{6,8}").find(canonical)?.value?.let {
+            dlsiteWorkNumber.find(canonical)?.value?.let {
                 require(it == number) { "DLsite 作品编号不匹配" }
             }
         }

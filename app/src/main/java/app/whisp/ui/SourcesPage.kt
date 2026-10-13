@@ -24,13 +24,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadService
+import app.whisp.DlsiteLoginActivity
 import app.whisp.data.SourceEntity
 import app.whisp.playback.OfflineService
 import kotlinx.coroutines.launch
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage: () -> Unit) {
+internal fun SourcesPage(
+    model: AppViewModel,
+    online: (String) -> Unit,
+    dlsite: (String) -> Unit,
+    storage: () -> Unit,
+) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     val downloads by model.downloads.collectAsStateWithLifecycle()
@@ -38,6 +44,12 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
     var adding by remember { mutableStateOf(false) }
     var remote by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<SourceEntity?>(null) }
+    val login =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result
+            ->
+            if (result.resultCode == android.app.Activity.RESULT_OK)
+                result.data?.getStringExtra(DlsiteLoginActivity.SOURCE)?.let(dlsite)
+        }
     val folder =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri != null)
@@ -75,7 +87,11 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
                 Modifier.fillMaxWidth()
                     .background(Surface, RoundedCornerShape(18.dp))
                     .clickable {
-                        if (source.kind == "asmrone") online(source.id) else selected = source
+                        when (source.kind) {
+                            "asmrone" -> online(source.id)
+                            "dlsite" -> dlsite(source.id)
+                            else -> selected = source
+                        }
                     }
                     .padding(start = 18.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -88,15 +104,25 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
                 )
                 Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                     Text(source.name, fontSize = 17.sp)
-                    if (source.id in busy) Text("扫描中", color = Muted, fontSize = 13.sp)
-                    else if (source.error != null) Text("扫描失败", color = Rose, fontSize = 13.sp)
+                    if (source.id in busy)
+                        Text(
+                            if (source.kind == "dlsite") "同步中" else "扫描中",
+                            color = Muted,
+                            fontSize = 13.sp,
+                        )
+                    else if (source.error != null)
+                        Text(
+                            if (source.kind == "dlsite") "同步失败" else "扫描失败",
+                            color = Rose,
+                            fontSize = 13.sp,
+                        )
                 }
                 if (source.id in busy)
                     CircularProgressIndicator(
                         Modifier.size(22.dp).padding(3.dp),
                         strokeWidth = 2.dp,
                     )
-                else if (source.kind == "asmrone")
+                else if (source.kind in setOf("asmrone", "dlsite"))
                     IconAction(Icons.Outlined.MoreVert, "管理${source.name}", Muted) {
                         selected = source
                     }
@@ -189,6 +215,19 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
                     TextButton(
                         onClick = {
                             adding = false
+                            login.launch(
+                                Intent(model.repository.context, DlsiteLoginActivity::class.java),
+                            )
+                        },
+                        Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.AccountCircle, null)
+                        Spacer(Modifier.width(12.dp))
+                        Text("DLsite")
+                    }
+                    TextButton(
+                        onClick = {
+                            adding = false
                             model.action { online(model.repository.addAsmrOne()) }
                         },
                         Modifier.fillMaxWidth(),
@@ -241,7 +280,8 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
             title = { Text(source.name) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (source.kind != "asmrone") Text(source.root, color = Muted, fontSize = 13.sp)
+                    if (source.kind !in setOf("asmrone", "dlsite"))
+                        Text(source.root, color = Muted, fontSize = 13.sp)
                     source.error?.let { Text(it, color = Rose) }
                     if (source.kind == "asmrone")
                         TextButton(
@@ -252,27 +292,52 @@ internal fun SourcesPage(model: AppViewModel, online: (String) -> Unit, storage:
                         ) {
                             Text("更新已加入作品")
                         }
+                    if (source.kind == "dlsite") {
+                        TextButton(
+                            onClick = {
+                                selected = null
+                                login.launch(
+                                    Intent(
+                                            model.repository.context,
+                                            DlsiteLoginActivity::class.java,
+                                        )
+                                        .putExtra(DlsiteLoginActivity.SOURCE, source.id),
+                                )
+                            },
+                        ) {
+                            Text("重新登录")
+                        }
+                        TextButton(
+                            onClick = {
+                                model.repository.scheduleScan(source.id)
+                                selected = null
+                            },
+                        ) {
+                            Text("同步已购作品")
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         if (source.kind == "asmrone") online(source.id)
+                        else if (source.kind == "dlsite") dlsite(source.id)
                         else model.repository.scheduleScan(source.id)
                         selected = null
                     },
                 ) {
-                    Text(if (source.kind == "asmrone") "浏览" else "刷新")
+                    Text(if (source.kind in setOf("asmrone", "dlsite")) "浏览" else "刷新")
                 }
             },
             dismissButton = {
                 TextButton(
                     onClick = {
-                        model.action { model.repository.removeSource(source.id) }
+                        model.removeSource(source.id)
                         selected = null
                     },
                 ) {
-                    Text("移除来源")
+                    Text(if (source.kind == "dlsite") "退出账号" else "移除来源")
                 }
             },
         )

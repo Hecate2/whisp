@@ -30,6 +30,7 @@ data class WorkEntity(
     val offlineAttachments: Boolean = false,
     @ColumnInfo(defaultValue = "''") val originalArtist: String = "",
     @ColumnInfo(defaultValue = "NULL") val coverUrl: String? = null,
+    @ColumnInfo(defaultValue = "'local'") val origin: String = "local",
 )
 
 @Entity(
@@ -45,6 +46,27 @@ data class WorkEntity(
         ],
 )
 data class DlsiteMetadataEntity(@PrimaryKey val workId: String, val snapshot: String)
+
+@Entity(
+    tableName = "dlsite_purchases",
+    primaryKeys = ["sourceId", "workno"],
+    foreignKeys =
+        [
+            ForeignKey(
+                entity = SourceEntity::class,
+                parentColumns = ["id"],
+                childColumns = ["sourceId"],
+                onDelete = ForeignKey.CASCADE,
+            ),
+        ],
+    indices = [Index("sourceId")],
+)
+data class DlsitePurchaseEntity(
+    val sourceId: String,
+    val workno: String,
+    val purchasedAt: Long,
+    val snapshot: String,
+)
 
 @Entity(tableName = "tracks", indices = [Index("workId")])
 data class TrackEntity(
@@ -107,6 +129,16 @@ data class WorkDetails(
 
 @Dao
 interface LibraryDao {
+    @Query(
+        "SELECT * FROM dlsite_purchases WHERE sourceId = :sourceId ORDER BY purchasedAt DESC, workno DESC",
+    )
+    fun observeDlsitePurchases(sourceId: String): Flow<List<DlsitePurchaseEntity>>
+
+    @Query("SELECT * FROM dlsite_purchases WHERE sourceId = :sourceId AND workno = :workno")
+    suspend fun dlsitePurchase(sourceId: String, workno: String): DlsitePurchaseEntity?
+
+    @Upsert suspend fun putDlsitePurchases(values: List<DlsitePurchaseEntity>)
+
     @Query("SELECT * FROM dlsite_metadata WHERE workId = :id")
     fun observeDlsiteMetadata(id: String): Flow<DlsiteMetadataEntity?>
 
@@ -122,6 +154,12 @@ interface LibraryDao {
     @Query("SELECT * FROM sources WHERE id = :id") suspend fun source(id: String): SourceEntity?
 
     @Upsert suspend fun putSource(source: SourceEntity)
+
+    @Query("UPDATE sources SET secret = :secret WHERE id = :id")
+    suspend fun updateSourceSecret(id: String, secret: String)
+
+    @Query("UPDATE sources SET error = :error WHERE id = :id")
+    suspend fun updateSourceError(id: String, error: String?)
 
     @Query("DELETE FROM sources WHERE id = :id") suspend fun deleteSource(id: String)
 
@@ -236,9 +274,15 @@ interface LibraryDao {
             ProgressEntity::class,
             BookmarkEntity::class,
             DlsiteMetadataEntity::class,
+            DlsitePurchaseEntity::class,
         ],
-    version = 3,
-    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
+    version = 4,
+    autoMigrations =
+        [
+            AutoMigration(from = 1, to = 2),
+            AutoMigration(from = 2, to = 3),
+            AutoMigration(from = 3, to = 4),
+        ],
     exportSchema = true,
 )
 abstract class LibraryDatabase : RoomDatabase() {

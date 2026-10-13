@@ -141,7 +141,12 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    repository.messages.tryEmit("播放失败，请检查文件授权或网络连接")
+                    val expired =
+                        generateSequence<Throwable>(error) { it.cause }
+                            .any { it is app.whisp.data.DlsiteLoginRequired }
+                    repository.messages.tryEmit(
+                        if (expired) "DLsite 登录已过期，请在来源页重新登录" else "播放失败，请检查文件授权或网络连接",
+                    )
                     saveProgress()
                 }
             },

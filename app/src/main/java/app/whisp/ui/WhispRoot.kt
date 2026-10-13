@@ -440,9 +440,20 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                     SourcesPage(
                                                         model,
                                                         { push(Route("asmrone", it)) },
+                                                        { push(Route("dlsite", it)) },
                                                     ) {
                                                         push(Route("storage"))
                                                     }
+                                                "dlsite" ->
+                                                    DlsiteLibraryPage(
+                                                        model,
+                                                        destination.id,
+                                                        {
+                                                            if (stack.size > 1)
+                                                                stack.removeAt(stack.lastIndex)
+                                                        },
+                                                        { push(Route("detail", it)) },
+                                                    )
                                                 "asmrone" ->
                                                     AsmrOnePage(
                                                         model,
@@ -1184,7 +1195,7 @@ private fun InfoDialog(
                     ) {
                         Text(if (loading) "读取中" else "更新 DLsite 元数据")
                     }
-                if (isAsmrOneWork(detail.work))
+                if (isAsmrOneWork(detail.work) || detail.work.origin == "dlsite")
                     TextButton(enabled = !loading, onClick = { confirmingRemoval = true }) {
                         Text("删除作品", color = Rose)
                     }

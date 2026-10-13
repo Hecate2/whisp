@@ -177,7 +177,7 @@ internal fun LazyListScope.dlsiteContent(
             ) {
                 details.circle?.let {
                     MetadataField(
-                        "社团",
+                        if (details.rj.startsWith("VJ")) "品牌" else "社团",
                         it,
                         filter?.let { apply ->
                             { if (it.length <= 160 && '$' !in it) apply(AsmrFacet("circle", it)) }
@@ -268,7 +268,7 @@ internal fun LazyListScope.dlsiteContent(
     }
 }
 
-private fun officialWorkUrl(rj: String) = "https://www.dlsite.com/maniax/work/=/product_id/$rj.html"
+private fun officialWorkUrl(rj: String) = app.whisp.data.dlsiteWorkUrl(rj)
 
 @Composable
 private fun MetadataField(label: String, value: String, click: (() -> Unit)? = null) {

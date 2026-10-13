@@ -82,6 +82,12 @@ WebDAV 测试在设备内启动带测试鉴权和 Range 的本机服务。网络
 
 ## DLsite 真机连接诊断
 
+`DlsiteAccountClientTest` 和 `DlsiteFileTreeTest` 使用合成目录与 MockWebServer，覆盖会话隔离、Cookie 路径和有效期、增量购买库、授权更新、字幕关联、目录层级及跨账号身份。
+
+`DlsiteLibraryIntegrationTest` 验证已购作品检索、详情与删除、退出账号后的购买库清理，以及诊断导出的字段和容量。`LibraryMigrationIntegrationTest` 验证已有数据库升级到版本 4 时保留标题、收藏、进度、书签和离线状态。
+
+`DlsiteAccountLiveIntegrationTest` 在隔离包的官方登录页完成登录后，通过 `-e probeDlsiteAccount true` 启用，验证已购作品、附带的时间轴字幕、原生播放、暂停、跳转、音轨下载和退出账号后的离线播放。测试完成后清理该测试作品和账号会话。常规测试套件跳过这项账号验证。
+
 `DlsiteLiveIntegrationTest` 使用隔离测试包读取目标 RJ 作品的官方元数据。通过 `probeRj` 参数启用；常规测试套件将其跳过。设置本机环境变量 `WHISP_DLSITE_TEST_RJ` 后执行：
 
 ```sh
