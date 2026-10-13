@@ -168,9 +168,25 @@ interface LibraryDao {
 
     @Transaction
     @Query(
-        "SELECT * FROM works WHERE offlineAttachments = 1 OR EXISTS (SELECT 1 FROM tracks JOIN locations ON locations.assetId = tracks.id WHERE tracks.workId = works.id) ORDER BY addedAt DESC",
+        "SELECT * FROM works ORDER BY addedAt DESC",
     )
     fun observeLibrary(): Flow<List<WorkDetails>>
+
+    @Query(
+        "SELECT DISTINCT tracks.workId FROM tracks JOIN locations ON locations.assetId = tracks.id JOIN sources ON sources.id = locations.sourceId",
+    )
+    fun observeLocatedWorks(): Flow<List<String>>
+
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM works WHERE coverId = :assetId AND offlineAttachments = 1 AND id != :excludingWork)",
+    )
+    suspend fun otherOfflineCover(assetId: String, excludingWork: String): Boolean
+
+    @Query("SELECT EXISTS(SELECT 1 FROM works WHERE coverId = :assetId AND id != :excludingWork)")
+    suspend fun otherCover(assetId: String, excludingWork: String): Boolean
+
+    @Query("SELECT * FROM locations WHERE sourceId = :sourceId")
+    suspend fun sourceLocations(sourceId: String): List<LocationEntity>
 
     @Transaction
     @Query("SELECT * FROM works WHERE id = :id")
@@ -187,6 +203,26 @@ interface LibraryDao {
     suspend fun imageAttachments(): List<String>
 
     @Query("SELECT * FROM tracks") suspend fun allTracks(): List<TrackEntity>
+
+    @Query(
+        "SELECT DISTINCT locations.assetId FROM locations JOIN sources ON sources.id = locations.sourceId WHERE locations.assetId IN (:ids)",
+    )
+    suspend fun locatedAssets(ids: List<String>): List<String>
+
+    @Query(
+        "SELECT * FROM tracks WHERE workId IN (:workIds) AND NOT EXISTS(SELECT 1 FROM locations JOIN sources ON sources.id = locations.sourceId WHERE locations.assetId = tracks.id)",
+    )
+    suspend fun unlocatedTracks(workIds: List<String>): List<TrackEntity>
+
+    @Query("DELETE FROM tracks WHERE id IN (:ids)") suspend fun deleteTracks(ids: List<String>)
+
+    @Query(
+        "SELECT * FROM attachments WHERE workId IN (:workIds) AND NOT EXISTS(SELECT 1 FROM locations JOIN sources ON sources.id = locations.sourceId WHERE locations.assetId = attachments.id)",
+    )
+    suspend fun unlocatedAttachments(workIds: List<String>): List<AttachmentEntity>
+
+    @Query("DELETE FROM attachments WHERE id IN (:ids)")
+    suspend fun deleteAttachments(ids: List<String>)
 
     @Upsert suspend fun putWorks(works: List<WorkEntity>)
 
@@ -218,6 +254,9 @@ interface LibraryDao {
     @Query("DELETE FROM attachments WHERE workId = :workId")
     suspend fun deleteWorkAttachments(workId: String)
 
+    @Query("DELETE FROM attachments WHERE workId = :workId AND id NOT IN (:keepIds)")
+    suspend fun deleteStaleAttachments(workId: String, keepIds: List<String>)
+
     @Query(
         "DELETE FROM locations WHERE assetId IN (SELECT id FROM tracks WHERE workId = :workId UNION SELECT id FROM attachments WHERE workId = :workId UNION SELECT coverId FROM works WHERE id = :workId)",
     )
@@ -240,6 +279,12 @@ interface LibraryDao {
 
     @Query("UPDATE works SET favorite = NOT favorite WHERE id = :id")
     suspend fun toggleFavorite(id: String)
+
+    @Query("UPDATE works SET title = :title, artist = :artist WHERE id = :id")
+    suspend fun updateWorkIdentity(id: String, title: String, artist: String)
+
+    @Query("UPDATE works SET coverId = :coverId WHERE id = :id")
+    suspend fun updateWorkCover(id: String, coverId: String)
 
     @Query("UPDATE works SET offlineAttachments = :ready WHERE id = :id")
     suspend fun attachmentsReady(id: String, ready: Boolean)

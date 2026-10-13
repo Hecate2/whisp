@@ -172,10 +172,10 @@ class DlsiteAccountClient(
         val production = count.int("production")
         require(production <= 100_000) { "购买库过大" }
         for (page in 1..((production + pageSize - 1) / pageSize)) {
-            json("api/v4/content/products?page=$page&last=$last")
-                .jsonObject["works"]
-                ?.jsonArray
-                ?.forEach { parseOwned(it.jsonObject, dates)?.let(result::add) }
+            val works =
+                json("api/v4/content/products?page=$page&last=$last").jsonObject["works"]
+                    as? JsonArray ?: throw IOException("DLsite 购买库格式错误")
+            works.forEach { parseOwned(it.jsonObject, dates)?.let(result::add) }
         }
         return DlsitePurchaseSync(result.distinctBy { it.workno }, started)
     }
@@ -183,6 +183,7 @@ class DlsiteAccountClient(
     suspend fun work(workno: String): DlsiteOwnedWork {
         require(validWorkno(workno))
         val item = json("api/v4/work/$workno").jsonObject
+        require(item.string("workno") == workno) { "DLsite 作品编号不匹配" }
         if (item["sales_date"] == JsonNull && item.string("entitlement_type") == "none")
             throw IOException("账号尚未购买该作品")
         return parseOwned(item, emptyMap()) ?: throw IOException("作品暂无可播放音声")

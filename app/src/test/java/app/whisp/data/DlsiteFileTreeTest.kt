@@ -58,6 +58,21 @@ class DlsiteFileTreeTest {
     }
 
     @Test
+    fun extensionlessAudioKeepsPeriodsInParentDirectoryAndCaptionPath() {
+        val tree =
+            Json.parseToJsonElement(
+                    fixture.replace("本編", "本編.ver2").replace("01_示例.wav", "01_示例"),
+                )
+                .jsonObject
+        val result = DlsiteFileTree.index(DlsiteOwnedWork("RJ00000001", "示例作品"), "account", 1, tree)
+        assertEquals("本編.ver2/01_示例.mp3", result.tracks.single().relativePath)
+        assertEquals(
+            "本編.ver2/01_示例.vtt",
+            result.attachments.single { it.kind == "subtitle" }.relativePath,
+        )
+    }
+
+    @Test
     fun directoryResourcesCannotEscapeOfficialWorkPaths() {
         assertThrows(IllegalArgumentException::class.java) {
             DlsiteFileTree.index(

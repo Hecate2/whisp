@@ -61,6 +61,8 @@ object SubtitleTimeline {
                             .toList()
                 }
                 .sortedBy { it.first }
+                .groupBy({ it.first }, { it.second })
+                .map { (start, text) -> start to text.distinct().joinToString("\n") }
         return rows.mapIndexed { index, row ->
             Cue(row.first, rows.getOrNull(index + 1)?.first ?: Long.MAX_VALUE, row.second)
         }

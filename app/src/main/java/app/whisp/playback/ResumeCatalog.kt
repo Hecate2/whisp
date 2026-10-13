@@ -24,7 +24,8 @@ internal class ResumeCatalog(private val repository: LibraryRepository) {
         repository.flushPlaybackProgress()
         val progress = repository.dao.latestProgress() ?: return null
         val detail = repository.dao.details(progress.workId) ?: return null
-        val tracks = TrackSections.queue(detail.tracks, progress.trackId)
+        val tracks =
+            repository.availableTracks(TrackSections.queue(detail.tracks, progress.trackId))
         if (tracks.isEmpty()) return null
         return Snapshot(detail.work, tracks, PlaybackQueue.resume(tracks, progress))
     }

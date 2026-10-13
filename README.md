@@ -74,7 +74,7 @@ Release 启用 R8 与资源裁剪，默认产物为待签名 APK。签名配置�
 
 `-PsplitApks` 使用 Android Gradle Plugin 的 ABI 拆分功能，在 `app/build/outputs/apk/release/` 生成四个架构安装包和 `app-universal-release.apk`。常规构建生成包含全部架构的单个安装包。
 
-开发与验收版本采用 `X.Y.Z-rc.N` 命名，GitHub Release 保留为预发布草稿。每次公开发布均以项目维护者对具体版本的明确批准为准，流程见 [版本发布](docs/RELEASING.md)。
+开发与验收版本采用 `X.Y.Z-rc.N` 命名，准备阶段使用 GitHub 预发布草稿供项目维护者验收。获得具体版本的发布批准后，公开对应的预发布条目，流程见 [版本发布](docs/RELEASING.md)。
 
 ## 测试与公开内容检查
 

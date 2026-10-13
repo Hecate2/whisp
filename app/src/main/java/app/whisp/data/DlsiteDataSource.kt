@@ -18,20 +18,23 @@ data class DlsiteMediaResource(
 @androidx.annotation.OptIn(UnstableApi::class)
 class DlsiteDataSource(
     private val resolve: suspend (String, String) -> DlsiteMediaResource,
-    private val loginRequired: (String) -> Unit = {},
+    private val loginRequired: (String, DlsiteAccountClient?) -> Unit = { _, _ -> },
 ) : DataSource {
     private var active: DataSource? = null
+    private var account: DlsiteAccountClient? = null
     private val listeners = mutableListOf<TransferListener>()
 
     override fun addTransferListener(listener: TransferListener) {
         listeners += listener
+        active?.addTransferListener(listener)
     }
 
     override fun open(spec: DataSpec): Long {
+        account = null
         return try {
             openAuthorized(spec)
         } catch (e: DlsiteLoginRequired) {
-            spec.uri.authority?.let(loginRequired)
+            spec.uri.authority?.let { loginRequired(it, account) }
             throw e
         }
     }
@@ -40,6 +43,7 @@ class DlsiteDataSource(
         val source = spec.uri.authority ?: throw IOException("来源未关联")
         val asset = spec.uri.lastPathSegment ?: throw IOException("文件标识无效")
         val resource = runBlocking(Dispatchers.IO) { resolve(source, asset) }
+        account = resource.client
         for (attempt in 0..1) {
             val url =
                 runBlocking(Dispatchers.IO) {
@@ -57,7 +61,7 @@ class DlsiteDataSource(
                 upstream.close()
                 active = null
                 if (e.responseCode !in setOf(401, 403))
-                    throw IOException("DLsite 音频读取失败（${e.responseCode}）")
+                    throw IOException("DLsite 音频读取失败（${e.responseCode}）", e)
                 if (attempt == 1) throw DlsiteLoginRequired()
             } catch (e: Exception) {
                 upstream.close()
@@ -76,7 +80,9 @@ class DlsiteDataSource(
     override fun getResponseHeaders() = active?.responseHeaders ?: emptyMap()
 
     override fun close() {
-        active?.close()
+        val upstream = active
         active = null
+        account = null
+        upstream?.close()
     }
 }

@@ -9,7 +9,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.*
 import androidx.paging.Pager
@@ -49,6 +51,7 @@ data class PlaybackState(
     val hasNext: Boolean = false,
     val ended: Boolean = false,
     val failed: Boolean = false,
+    val queueIds: List<String> = emptyList(),
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -181,58 +184,67 @@ class AppViewModel(
             }
         }
         if (dlsiteJobs.size >= 6) dlsiteJobs.remove(dlsiteJobs.keys.first())?.cancel()
-        val job = viewModelScope.launch {
-            val cached =
-                dlsiteStates.value[workId]?.details ?: seed ?: repository.readDlsiteDetails(workId)
-            if (cached != null) update { it.copy(details = cached.preserving(it.details)) }
-            val now = System.currentTimeMillis()
-            val ready =
-                when (part) {
-                    "product" ->
-                        cached?.completeProduct == true &&
-                            now - cached.productFetchedAt < 7 * 24 * 60 * 60 * 1000L
-                    "description" -> cached != null && cached.descriptionFetchedAt > 0
-                    else ->
-                        cached?.statistics?.let { now - it.fetchedAt < 24 * 60 * 60 * 1000L } ==
-                            true
-                }
-            if (ready && !force) {
-                dlsiteJobs.remove(key)
-                return@launch
-            }
-            update { it.copy(loading = it.loading + part, errors = it.errors - part) }
-            try {
-                val fresh =
-                    when (part) {
-                        "product" -> client.work(rj).details
-                        "description" -> {
-                            val blocks = client.description(rj)
-                            (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
-                                description = blocks,
-                                descriptionFetchedAt = System.currentTimeMillis(),
-                            )
+        // Register ownership before launching: a cancelled, evicted request can finish
+        // after a replacement for the same key has already begun.
+        val job =
+            viewModelScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val cached =
+                        dlsiteStates.value[workId]?.details
+                            ?: seed
+                            ?: repository.readDlsiteDetails(workId)
+                    if (cached != null) update { it.copy(details = cached.preserving(it.details)) }
+                    val now = System.currentTimeMillis()
+                    val ready =
+                        when (part) {
+                            "product" ->
+                                cached?.completeProduct == true &&
+                                    now - cached.productFetchedAt < 7 * 24 * 60 * 60 * 1000L
+                            "description" -> cached != null && cached.descriptionFetchedAt > 0
+                            else ->
+                                cached?.statistics?.let {
+                                    now - it.fetchedAt < 24 * 60 * 60 * 1000L
+                                } == true
                         }
-                        else -> {
-                            val statistics = client.statistics(rj)
-                            (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
-                                statistics = statistics,
-                            )
+                    if (ready && !force) return@launch
+                    update { it.copy(loading = it.loading + part, errors = it.errors - part) }
+                    val fresh =
+                        when (part) {
+                            "product" -> client.work(rj).details
+                            "description" -> {
+                                val blocks = client.description(rj)
+                                (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
+                                    description = blocks,
+                                    descriptionFetchedAt = System.currentTimeMillis(),
+                                )
+                            }
+                            else -> {
+                                val statistics = client.statistics(rj)
+                                (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
+                                    statistics = statistics,
+                                )
+                            }
                         }
+                    val merged = fresh.preserving(dlsiteStates.value[workId]?.details)
+                    repository.saveDlsiteDetails(workId, merged)
+                    update { it.copy(details = merged.preserving(it.details)) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    update { it.copy(errors = it.errors + (part to (e.message ?: "DLsite 读取失败"))) }
+                } finally {
+                    if (
+                        dlsiteJobs[key] == null ||
+                            dlsiteJobs[key] === currentCoroutineContext()[Job]
+                    ) {
+                        update { it.copy(loading = it.loading - part) }
+                        dlsiteJobs.remove(key)
                     }
-                val merged = fresh.preserving(dlsiteStates.value[workId]?.details)
-                repository.saveDlsiteDetails(workId, merged)
-                update { it.copy(details = merged.preserving(it.details)) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                update { it.copy(errors = it.errors + (part to (e.message ?: "DLsite 读取失败"))) }
-            } finally {
-                update { it.copy(loading = it.loading - part) }
-                dlsiteJobs.remove(key)
+                }
             }
-        }
         dlsiteJobs[key] = job
         job.invokeOnCompletion { if (dlsiteJobs[key] === job) dlsiteJobs.remove(key) }
+        job.start()
     }
 
     // Event snapshots never advance merely because playback time passes.
@@ -240,6 +252,8 @@ class AppViewModel(
     val position = MutableStateFlow(0L)
     val cues = MutableStateFlow<List<Cue>>(emptyList())
     val subtitleLoading = MutableStateFlow(false)
+    val subtitleError = MutableStateFlow<String?>(null)
+    val queueTracks = MutableStateFlow<List<TrackEntity>>(emptyList())
     val openingTrackId = MutableStateFlow<String?>(null)
     val loopDraftStart = MutableStateFlow(-1L)
     private var loopDraftTrack: String? = null
@@ -247,6 +261,8 @@ class AppViewModel(
     private val subtitleCache = LruCache<String, List<Cue>>(16)
     val error = MutableStateFlow<String?>(null)
     private var subtitleJob: Job? = null
+    private var queueJob: Job? = null
+    private var queueItems = emptyList<MediaItem>()
     private var openingJob: Job? = null
     private var openingWorkId: String? = null
     private var openingGeneration = 0
@@ -341,12 +357,75 @@ class AppViewModel(
                 c.hasNextMediaItem(),
                 c.playbackState == Player.STATE_ENDED,
                 c.playerError != null,
+                updateQueue(c),
             )
         if (loopDraftTrack != id) loopDraftStart.value = -1
         if (id != null && id != subtitleTrackId) loadSubtitles(id)
     }
 
+    private fun updateQueue(c: MediaController): List<String> {
+        val timeline = c.currentTimeline
+        val window = Timeline.Window()
+        val items = buildList {
+            var index = timeline.getFirstWindowIndex(c.shuffleModeEnabled)
+            while (index != C.INDEX_UNSET && size < timeline.windowCount) {
+                add(timeline.getWindow(index, window).mediaItem)
+                index =
+                    timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, c.shuffleModeEnabled)
+            }
+        }
+        val known = queueTracks.value.associateBy { it.id }
+        val snapshots = items.mapIndexed { index, item ->
+            val track =
+                known[item.mediaId]
+                    ?: TrackEntity(
+                        item.mediaId,
+                        item.mediaMetadata.extras?.getString("workId").orEmpty(),
+                        item.mediaMetadata.title?.toString().orEmpty().ifBlank {
+                            "音轨 ${index + 1}"
+                        },
+                        "",
+                        "",
+                        index + 1,
+                    )
+            if (item.mediaId == c.currentMediaItem?.mediaId && c.duration > 0)
+                track.copy(durationMs = c.duration)
+            else track
+        }
+        queueTracks.value = snapshots
+        if (queueItems != items) {
+            queueItems = items
+            queueJob?.cancel()
+            queueJob =
+                if (items.isEmpty()) null
+                else
+                    viewModelScope.launch {
+                        try {
+                            val indexed = snapshots.map { repository.dao.track(it.id) ?: it }
+                            ensureActive()
+                            if (queueItems == items) {
+                                val latest = queueTracks.value.associateBy { it.id }
+                                queueTracks.value = indexed.map { track ->
+                                    track.copy(
+                                        durationMs =
+                                            latest[track.id]?.durationMs?.takeIf { it > 0 }
+                                                ?: track.durationMs,
+                                    )
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // MediaItem snapshots keep the active queue readable during a
+                            // transient database failure.
+                        }
+                    }
+        }
+        return items.map { it.mediaId }
+    }
+
     private fun resume(c: MediaController) {
+        retrySubtitles(c.currentMediaItem?.mediaId)
         if (c.playbackState == Player.STATE_ENDED) c.seekTo(0, 0)
         if (c.playbackState == Player.STATE_IDLE) c.prepare()
         c.play()
@@ -384,10 +463,15 @@ class AppViewModel(
                         detail.tracks.any { it.id == id }
                     }
                 val tracks =
-                    TrackSections.queue(
-                        detail.tracks,
-                        if (restart) trackId else trackId ?: activeId ?: checkpoint?.trackId,
+                    repository.availableTracks(
+                        TrackSections.queue(
+                            detail.tracks,
+                            if (restart) trackId else trackId ?: activeId ?: checkpoint?.trackId,
+                        ),
                     )
+                require(trackId == null || tracks.any { it.id == trackId }) {
+                    "音轨文件不可用，请检查来源或离线保存"
+                }
                 require(tracks.isNotEmpty()) { "作品没有音轨" }
                 val recent = progress.value.firstOrNull { it.workId == detail.work.id }
                 val provisional =
@@ -411,30 +495,38 @@ class AppViewModel(
                     )
                 position.value = player.value.positionMs
                 if (subtitleTrackId != provisional.id) loadSubtitles(provisional.id)
+                else retrySubtitles(provisional.id)
                 val c =
                     controller
                         ?: withContext(Dispatchers.IO) { future.get() }.also { controller = it }
                 // Continue the active work from the live player, never its older database
                 // checkpoint.
                 val currentIndex = tracks.indexOfFirst { it.id == c.currentMediaItem?.mediaId }
-                if (
+                val continuesCurrent =
                     !restart &&
                         startPosition == null &&
                         !shuffle &&
                         currentIndex >= 0 &&
                         (trackId == null || trackId == tracks[currentIndex].id)
-                ) {
+                val sameQueue =
+                    c.mediaItemCount == tracks.size &&
+                        tracks.indices.all { c.getMediaItemAt(it).mediaId == tracks[it].id }
+                if (continuesCurrent && sameQueue) {
                     openingTrackId.value = null
+                    c.shuffleModeEnabled = false
+                    c.repeatMode = Player.REPEAT_MODE_OFF
                     if (openingPlayWhenReady) resume(c) else c.pause()
                     updatePlayer()
                     return@launch
                 }
-                c.pause()
                 val point =
-                    if (restart) QueuePosition(0, 0)
+                    if (continuesCurrent && c.playbackState != Player.STATE_ENDED)
+                        QueuePosition(currentIndex, c.currentPosition.coerceAtLeast(0))
+                    else if (restart) QueuePosition(0, 0)
                     else if (trackId != null)
                         QueuePosition(tracks.indexOfFirst { it.id == trackId }.coerceAtLeast(0), 0)
                     else PlaybackQueue.resume(tracks, checkpoint)
+                c.pause()
                 val position = startPosition?.coerceAtLeast(0) ?: point.positionMs
                 val selected = tracks[point.index]
                 openingTrackId.value = selected.id
@@ -449,9 +541,6 @@ class AppViewModel(
                     )
                 this@AppViewModel.position.value = position
                 loadSubtitles(selected.id)
-                val sameQueue =
-                    c.mediaItemCount == tracks.size &&
-                        tracks.indices.all { c.getMediaItemAt(it).mediaId == tracks[it].id }
                 if (sameQueue) c.seekTo(point.index, position)
                 else
                     c.setMediaItems(
@@ -537,6 +626,18 @@ class AppViewModel(
         updatePlayer()
     }
 
+    fun selectQueuedTrack(id: String) {
+        val c = controller ?: return
+        val index = (0 until c.mediaItemCount).firstOrNull { c.getMediaItemAt(it).mediaId == id }
+        if (index == null) {
+            error.value = "播放队列已更新"
+            return
+        }
+        if (index != c.currentMediaItemIndex) c.seekTo(index, 0)
+        resume(c)
+        updatePlayer()
+    }
+
     fun timer(minutes: Int) {
         controller?.sendCustomCommand(
             SessionCommand(PlaybackService.TIMER, Bundle.EMPTY),
@@ -569,9 +670,8 @@ class AppViewModel(
                 openingTrackId.value = null
             }
             val trackIds =
-                library.value
-                    .filter { it.work.id in workIds }
-                    .flatMap { it.tracks }
+                workIds
+                    .flatMap { repository.dao.details(it)?.tracks.orEmpty() }
                     .map { it.id }
                     .toSet()
             controller?.let { c ->
@@ -656,38 +756,56 @@ class AppViewModel(
     }
 
     fun loadSubtitles(id: String?) {
+        if (id != null && id == subtitleTrackId && subtitleJob?.isActive == true) return
         subtitleJob?.cancel()
         subtitleTrackId = id
         cues.value = id?.let { subtitleCache[it] }.orEmpty()
         subtitleLoading.value = false
+        subtitleError.value = null
         if (id == null || subtitleCache[id] != null) return
-        subtitleJob = viewModelScope.launch {
-            try {
-                val track = repository.dao.track(id) ?: return@launch
-                val attachmentId = track.subtitleId ?: return@launch
-                subtitleLoading.value = true
-                val detail = repository.dao.details(track.workId) ?: return@launch
-                val attachment =
-                    detail.attachments.firstOrNull { it.id == attachmentId } ?: return@launch
-                val bytes = repository.readAsset(attachment.id)
-                val parsed =
-                    withContext(Dispatchers.Default) {
-                        SubtitleTimeline.parse(
-                            bytes.toString(Charsets.UTF_8),
-                            attachment.fileName.substringAfterLast('.'),
-                        )
+        val job =
+            viewModelScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val track = repository.dao.track(id) ?: return@launch
+                    val attachmentId = track.subtitleId ?: return@launch
+                    subtitleLoading.value = true
+                    val detail = repository.dao.details(track.workId) ?: return@launch
+                    val attachment =
+                        detail.attachments.firstOrNull { it.id == attachmentId } ?: return@launch
+                    val bytes = repository.readAsset(attachment.id)
+                    val parsed =
+                        withContext(Dispatchers.Default) {
+                            SubtitleTimeline.parse(
+                                bytes.toString(Charsets.UTF_8),
+                                attachment.fileName.substringAfterLast('.'),
+                            )
+                        }
+                    ensureActive()
+                    subtitleCache.put(id, parsed)
+                    if (subtitleTrackId == id) cues.value = parsed
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    if (subtitleTrackId == id && subtitleJob === currentCoroutineContext()[Job]) {
+                        subtitleError.value = "字幕暂时不可用"
                     }
-                ensureActive()
-                subtitleCache.put(id, parsed)
-                if (subtitleTrackId == id) cues.value = parsed
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                if (subtitleTrackId == id) error.value = "字幕暂时不可用"
-            } finally {
-                if (subtitleTrackId == id) subtitleLoading.value = false
+                } finally {
+                    if (subtitleTrackId == id && subtitleJob === currentCoroutineContext()[Job])
+                        subtitleLoading.value = false
+                }
             }
-        }
+        subtitleJob = job
+        job.start()
+    }
+
+    fun retrySubtitles(id: String? = subtitleTrackId) {
+        if (
+            id != null &&
+                id == subtitleTrackId &&
+                subtitleError.value != null &&
+                subtitleJob?.isActive != true
+        )
+            loadSubtitles(id)
     }
 
     override fun onCleared() {

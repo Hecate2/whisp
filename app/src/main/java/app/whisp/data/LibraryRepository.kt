@@ -108,7 +108,10 @@ class LibraryRepository(val context: Context) {
         require(expectedSource == null || expectedSource == id) { "请登录该来源对应的账号" }
         dlsiteCookieWrites.withLock {
             val previous = dao.source(id)
-            dlsiteClients.remove(id)?.session?.clear()
+            dlsiteClients.remove(id)?.let {
+                it.session.clear()
+                it.http.dispatcher.cancelAll()
+            }
             val number = dao.sources().count { it.kind == "dlsite" }
             dao.putSource(
                 (previous
@@ -124,7 +127,7 @@ class LibraryRepository(val context: Context) {
                     ),
             )
         }
-        scheduleScan(id)
+        scheduleScan(id, force = true)
         return id
     }
 
@@ -134,85 +137,121 @@ class LibraryRepository(val context: Context) {
             .flowOn(Dispatchers.Default)
 
     suspend fun syncDlsitePurchases(sourceId: String, full: Boolean = false) {
-        val source = dao.source(sourceId) ?: error("来源已移除")
-        val synced = dlsiteAccount(sourceId).purchases(if (full) 0 else source.lastScan)
-        database.withTransaction {
-            val latest = dao.source(sourceId) ?: error("来源已移除")
-            dao.putDlsitePurchases(
-                synced.works.map {
-                    val old =
-                        decodeOwnedWork(dao.dlsitePurchase(sourceId, it.workno)?.snapshot.orEmpty())
-                    val merged =
-                        it.copy(
-                            artist = it.artist.ifBlank { old?.artist.orEmpty() },
-                            circle = it.circle.ifBlank { old?.circle.orEmpty() },
-                            coverUrl = it.coverUrl ?: old?.coverUrl,
-                            purchasedAt =
-                                it.purchasedAt.takeIf { date -> date > 0 } ?: old?.purchasedAt ?: 0,
-                            metadataReady = old?.metadataReady == true,
-                        )
-                    DlsitePurchaseEntity(
-                        sourceId,
-                        merged.workno,
-                        merged.purchasedAt,
-                        merged.encode(),
-                    )
-                },
-            )
-            dao.putSource(latest.copy(lastScan = synced.completedAt, error = null))
-        }
-        enrichDlsiteCatalog(sourceId)
+        syncDlsitePurchases(sourceId, full, dlsiteAccount(sourceId))
     }
 
-    private suspend fun enrichDlsiteCatalog(sourceId: String) = coroutineScope {
-        val pending = dlsitePurchases(sourceId).first().filter { !it.metadataReady }
-        val lanes = Semaphore(2)
-        pending
-            .map { owned ->
-                async {
-                    lanes.withPermit {
-                        val metadata =
-                            try {
-                                dlsite.work(owned.workno)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (_: Exception) {
-                                return@withPermit
-                            }
-                        val voices =
-                            metadata.details.credits
-                                .filter { it.role == "voice_by" }
-                                .joinToString(" / ") { it.name }
-                        database.withTransaction {
-                            if (dao.source(sourceId) == null) return@withTransaction
-                            val current =
-                                decodeOwnedWork(
-                                    dao.dlsitePurchase(sourceId, owned.workno)?.snapshot.orEmpty(),
-                                ) ?: return@withTransaction
-                            val enriched =
-                                current.copy(
-                                    title = metadata.title,
-                                    artist = voices.ifBlank { current.artist },
-                                    circle = metadata.details.circle ?: current.circle,
-                                    coverUrl = metadata.coverUrl,
-                                    metadataReady = metadata.details.completeProduct,
-                                )
-                            dao.putDlsitePurchases(
-                                listOf(
-                                    DlsitePurchaseEntity(
-                                        sourceId,
-                                        enriched.workno,
-                                        enriched.purchasedAt,
-                                        enriched.encode(),
-                                    ),
-                                ),
+    private fun requireDlsiteClient(sourceId: String, client: DlsiteAccountClient) {
+        if (dlsiteClients[sourceId] !== client) throw CancellationException("DLsite 会话已更新")
+    }
+
+    private suspend fun syncDlsitePurchases(
+        sourceId: String,
+        full: Boolean,
+        client: DlsiteAccountClient,
+    ) {
+        val source = dlsiteCookieWrites.withLock {
+            requireDlsiteClient(sourceId, client)
+            dao.source(sourceId) ?: throw CancellationException("来源已移除")
+        }
+        val synced =
+            try {
+                client.purchases(if (full) 0 else source.lastScan)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                dlsiteCookieWrites.withLock { requireDlsiteClient(sourceId, client) }
+                throw e
+            }
+        dlsiteCookieWrites.withLock {
+            requireDlsiteClient(sourceId, client)
+            database.withTransaction {
+                val latest = dao.source(sourceId) ?: throw CancellationException("来源已移除")
+                dao.putDlsitePurchases(
+                    synced.works.map {
+                        val old =
+                            decodeOwnedWork(
+                                dao.dlsitePurchase(sourceId, it.workno)?.snapshot.orEmpty(),
                             )
+                        val merged =
+                            it.copy(
+                                artist = it.artist.ifBlank { old?.artist.orEmpty() },
+                                circle = it.circle.ifBlank { old?.circle.orEmpty() },
+                                coverUrl = it.coverUrl ?: old?.coverUrl,
+                                purchasedAt =
+                                    it.purchasedAt.takeIf { date -> date > 0 }
+                                        ?: old?.purchasedAt
+                                        ?: 0,
+                                metadataReady = old?.metadataReady == true,
+                            )
+                        DlsitePurchaseEntity(
+                            sourceId,
+                            merged.workno,
+                            merged.purchasedAt,
+                            merged.encode(),
+                        )
+                    },
+                )
+                dao.putSource(latest.copy(lastScan = synced.completedAt, error = null))
+            }
+        }
+        enrichDlsiteCatalog(sourceId, client)
+    }
+
+    private suspend fun enrichDlsiteCatalog(sourceId: String, client: DlsiteAccountClient) =
+        coroutineScope {
+            val pending = dlsitePurchases(sourceId).first().filter { !it.metadataReady }
+            val lanes = Semaphore(2)
+            pending
+                .map { owned ->
+                    async {
+                        lanes.withPermit {
+                            val metadata =
+                                try {
+                                    dlsite.work(owned.workno)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    return@withPermit
+                                }
+                            val voices =
+                                metadata.details.credits
+                                    .filter { it.role == "voice_by" }
+                                    .joinToString(" / ") { it.name }
+                            dlsiteCookieWrites.withLock {
+                                requireDlsiteClient(sourceId, client)
+                                database.withTransaction {
+                                    if (dao.source(sourceId) == null) return@withTransaction
+                                    val current =
+                                        decodeOwnedWork(
+                                            dao.dlsitePurchase(sourceId, owned.workno)
+                                                ?.snapshot
+                                                .orEmpty(),
+                                        ) ?: return@withTransaction
+                                    val enriched =
+                                        current.copy(
+                                            title = metadata.title,
+                                            artist = voices.ifBlank { current.artist },
+                                            circle = metadata.details.circle ?: current.circle,
+                                            coverUrl = metadata.coverUrl,
+                                            metadataReady = metadata.details.completeProduct,
+                                        )
+                                    dao.putDlsitePurchases(
+                                        listOf(
+                                            DlsitePurchaseEntity(
+                                                sourceId,
+                                                enriched.workno,
+                                                enriched.purchasedAt,
+                                                enriched.encode(),
+                                            ),
+                                        ),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-            }
-            .awaitAll()
-    }
+                .awaitAll()
+        }
 
     suspend fun importDlsiteWork(
         sourceId: String,
@@ -241,6 +280,7 @@ class LibraryRepository(val context: Context) {
                     } catch (_: Exception) {
                         null
                     }
+                var obsoleteTracks = emptyList<String>()
                 database.withTransaction {
                     require(dao.source(sourceId)?.kind == "dlsite") { "来源已移除" }
                     val old = dao.details(workId)
@@ -272,7 +312,13 @@ class LibraryRepository(val context: Context) {
                                 offlineAttachments = it.offlineAttachments,
                             )
                         } ?: fresh
-                    dao.putWorks(listOf(saved))
+                    val retained =
+                        saved.copy(
+                            offlineAttachments =
+                                saved.offlineAttachments &&
+                                    offlineFilesPresent(saved, indexed.attachments),
+                        )
+                    dao.putWorks(listOf(retained))
                     dao.putDlsitePurchases(
                         listOf(
                             DlsitePurchaseEntity(
@@ -296,10 +342,34 @@ class LibraryRepository(val context: Context) {
                     val pinned =
                         old?.tracks
                             .orEmpty()
-                            .filter { downloads.value[it.id]?.state == Download.STATE_COMPLETED }
+                            .filter {
+                                downloadManager.downloadIndex.getDownload(it.id)?.state ==
+                                    Download.STATE_COMPLETED
+                            }
                             .map { it.id }
                     dao.deleteStaleTracks(workId, indexed.tracks.map { it.id } + pinned)
-                    dao.putTracks(indexed.tracks)
+                    val oldTracks = old?.tracks.orEmpty().associateBy { it.id }
+                    obsoleteTracks =
+                        (oldTracks.keys - (indexed.tracks.map { it.id } + pinned).toSet()).toList()
+                    dao.putTracks(
+                        indexed.tracks.map { track ->
+                            track.copy(
+                                durationMs =
+                                    track.durationMs.takeIf { it > 0 }
+                                        ?: oldTracks[track.id]?.durationMs
+                                        ?: 0,
+                            )
+                        },
+                    )
+                    val pinnedAttachments =
+                        old?.attachments
+                            .orEmpty()
+                            .filter { File(offlineDir, it.id).isFile }
+                            .map { it.id }
+                    dao.deleteStaleAttachments(
+                        workId,
+                        indexed.attachments.map { it.id } + pinnedAttachments,
+                    )
                     dao.putAttachments(indexed.attachments)
                     dao.putLocations(indexed.locations)
                     metadata?.details?.let {
@@ -311,6 +381,7 @@ class LibraryRepository(val context: Context) {
                         )
                     }
                 }
+                removeObsoleteDownloads(obsoleteTracks)
                 storageChanged()
                 dao.details(workId) ?: error("作品保存失败")
             }
@@ -335,7 +406,20 @@ class LibraryRepository(val context: Context) {
     }
 
     val smb = SmbClient { Log.i("WhispScan", it) }
-    val library = dao.observeLibrary().stateIn(scope, SharingStarted.Eagerly, emptyList())
+    private val completedDownloads = MutableStateFlow<Set<String>>(emptySet())
+    val library =
+        combine(dao.observeLibrary(), dao.observeLocatedWorks(), completedDownloads) {
+                works,
+                located,
+                completed ->
+                val online = located.toSet()
+                works.filter { detail ->
+                    detail.work.offlineAttachments ||
+                        detail.work.id in online ||
+                        detail.tracks.any { it.id in completed }
+                }
+            }
+            .stateIn(scope, SharingStarted.Eagerly, emptyList())
     val sources = dao.observeSources().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val progress = dao.observeProgress().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val storageChanges = MutableStateFlow(0L)
@@ -367,6 +451,7 @@ class LibraryRepository(val context: Context) {
 
     val bookmarks = dao.observeBookmarks().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val busy = MutableStateFlow<Set<String>>(emptySet())
+    private val scanOwners = java.util.concurrent.ConcurrentHashMap<String, Any>()
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val artworkRevision = MutableStateFlow(0)
     private val sizeKey = intPreferencesKey("subtitle-size")
@@ -445,8 +530,20 @@ class LibraryRepository(val context: Context) {
             smb.open(source, secrets.decrypt(source.secret), uri)
         }
         val dlsiteData =
-            DlsiteDataSource(::dlsiteResource) { sourceId ->
-                scope.launch { dao.updateSourceError(sourceId, "请重新登录 DLsite") }
+            DlsiteDataSource(::dlsiteResource) { sourceId, client ->
+                scope.launch {
+                    dlsiteCookieWrites.withLock {
+                        val current = dlsiteClients[sourceId]
+                        val source = dao.source(sourceId)
+                        if (
+                            source?.kind == "dlsite" &&
+                                (client != null && current === client ||
+                                    client == null && current == null && source.secret.isBlank())
+                        ) {
+                            dao.updateSourceError(sourceId, "请重新登录 DLsite")
+                        }
+                    }
+                }
             }
         object : DataSource {
             private var active: DataSource = fallback
@@ -562,6 +659,11 @@ class LibraryRepository(val context: Context) {
         scope.launch(Dispatchers.Main.immediate) {
             for (ignored in downloadRefresh) {
                 val stored = withContext(Dispatchers.IO) { readDownloads() }
+                completedDownloads.value =
+                    stored.values
+                        .filter { it.state == Download.STATE_COMPLETED }
+                        .map { it.request.id }
+                        .toSet()
                 downloads.value = stored
                 sampleDownloadProgress()
             }
@@ -848,6 +950,7 @@ class LibraryRepository(val context: Context) {
                     atomicFile(target, client.bytes(work.coverUrl!!, 16 * 1024 * 1024))
             }
         currentCoroutineContext().ensureActive()
+        var obsoleteTracks = emptyList<String>()
         database.withTransaction {
             val latestSource = dao.source(sourceId) ?: error("来源已移除")
             val old = dao.details(work.workId)
@@ -878,7 +981,15 @@ class LibraryRepository(val context: Context) {
                     }
                     .map { it.id }
             dao.deleteWorkSourceLocations(work.workId, sourceId)
-            dao.putWorks(listOf(savedWork))
+            dao.putWorks(
+                listOf(
+                    savedWork.copy(
+                        offlineAttachments =
+                            savedWork.offlineAttachments &&
+                                offlineFilesPresent(savedWork, indexed.attachments),
+                    ),
+                ),
+            )
             preview.metadata?.let { fresh ->
                 val previous = decodeDlsiteDetails(dao.dlsiteMetadata(work.workId)?.snapshot)
                 dao.putDlsiteMetadata(
@@ -886,7 +997,14 @@ class LibraryRepository(val context: Context) {
                 )
             }
             dao.deleteStaleTracks(work.workId, indexed.tracks.map { it.id } + pinned)
-            if (!savedWork.offlineAttachments) dao.deleteWorkAttachments(work.workId)
+            obsoleteTracks =
+                (oldTracks.keys - (indexed.tracks.map { it.id } + pinned).toSet()).toList()
+            val pinnedAttachments =
+                old?.attachments.orEmpty().filter { File(offlineDir, it.id).isFile }.map { it.id }
+            dao.deleteStaleAttachments(
+                work.workId,
+                indexed.attachments.map { it.id } + pinnedAttachments,
+            )
             dao.putTracks(
                 indexed.tracks.map { track ->
                     track.copy(
@@ -901,9 +1019,22 @@ class LibraryRepository(val context: Context) {
             dao.putLocations(indexed.locations)
             dao.putSource(latestSource.copy(lastScan = generation, error = null))
         }
+        removeObsoleteDownloads(obsoleteTracks)
         storageChanged()
         return work.workId
     }
+
+    private fun removeObsoleteDownloads(ids: List<String>) {
+        for (id in ids) {
+            if (downloadManager.downloadIndex.getDownload(id) != null)
+                DownloadService.sendRemoveDownload(context, OfflineService::class.java, id, false)
+            streamingCache.removeResource(id)
+        }
+    }
+
+    private fun offlineFilesPresent(work: WorkEntity, attachments: List<AttachmentEntity>) =
+        attachments.all { File(offlineDir, it.id).isFile } &&
+            (work.coverId == null || File(offlineDir, work.coverId).isFile)
 
     suspend fun updateDlsiteMetadata(id: String, client: DlsiteClient = dlsite) =
         withContext(Dispatchers.IO) {
@@ -980,20 +1111,18 @@ class LibraryRepository(val context: Context) {
 
     suspend fun ensureDlsiteImage(id: String, url: String): File? =
         imageRequest(id) {
-            imageLanes.withPermit {
-                artworkCache.get(id)
-                    ?: cacheArtwork(
-                            id,
-                            onlineHttp.onlineBytes(
-                                okhttp3.Request.Builder()
-                                    .url(url)
-                                    .header("Referer", "https://www.dlsite.com/")
-                                    .build(),
-                                16 * 1024 * 1024,
-                            ),
-                        )
-                        .also { artworkRevision.update { it + 1 } }
-            }
+            artworkCache.get(id)
+                ?: cacheArtwork(
+                        id,
+                        onlineHttp.onlineBytes(
+                            okhttp3.Request.Builder()
+                                .url(url)
+                                .header("Referer", "https://www.dlsite.com/")
+                                .build(),
+                            16 * 1024 * 1024,
+                        ),
+                    )
+                    .also { artworkRevision.update { it + 1 } }
         }
 
     suspend fun removeAsmrWork(id: String) {
@@ -1040,11 +1169,13 @@ class LibraryRepository(val context: Context) {
                 }
                 imageWrites.withLock {
                     assets.forEach { asset ->
-                        File(offlineDir, asset).delete()
+                        if (!dao.otherOfflineCover(asset, id)) File(offlineDir, asset).delete()
                         File(customArtworkDir, asset).delete()
                         File(artworkDir, asset).delete()
-                        artworkCache.remove(asset)
-                        previewCache.remove(asset)
+                        if (!dao.otherCover(asset, id)) {
+                            artworkCache.remove(asset)
+                            previewCache.remove(asset)
+                        }
                     }
                 }
                 artworkRevision.update { it + 1 }
@@ -1075,8 +1206,8 @@ class LibraryRepository(val context: Context) {
                     }
         }
 
-    fun scheduleScan(id: String) {
-        if (id in busy.value) return
+    fun scheduleScan(id: String, force: Boolean = false) {
+        if (!force && id in busy.value) return
         val request =
             OneTimeWorkRequestBuilder<ScanWorker>()
                 .setInputData(workDataOf("sourceId" to id))
@@ -1089,12 +1220,19 @@ class LibraryRepository(val context: Context) {
 
     suspend fun scan(id: String) {
         val source = dao.source(id) ?: return
-        busy.update { it + id }
+        val owner = Any()
+        synchronized(scanOwners) {
+            scanOwners[id] = owner
+            busy.update { it + id }
+        }
+        var dlsiteClient: DlsiteAccountClient? = null
         val startTime = android.os.SystemClock.elapsedRealtime()
         try {
             Log.i("WhispScan", "Started ${source.kind} scan")
             if (source.kind == "dlsite") {
-                syncDlsitePurchases(source.id)
+                val client = dlsiteAccount(source.id)
+                dlsiteClient = client
+                syncDlsitePurchases(source.id, false, client)
                 return
             }
             if (source.kind == "asmrone") {
@@ -1103,8 +1241,10 @@ class LibraryRepository(val context: Context) {
                     val id = dao.work(workId)?.rj?.removePrefix("RJ")?.toLongOrNull() ?: continue
                     importAsmrWork(source.id, id, existingOnly = true)
                 }
-                dao.source(source.id)?.let {
-                    dao.putSource(it.copy(lastScan = System.currentTimeMillis(), error = null))
+                database.withTransaction {
+                    dao.source(source.id)?.let {
+                        dao.putSource(it.copy(lastScan = System.currentTimeMillis(), error = null))
+                    }
                 }
                 return
             }
@@ -1116,35 +1256,74 @@ class LibraryRepository(val context: Context) {
                     else -> error("不支持的来源类型")
                 }
             val generation = System.currentTimeMillis()
-            val indexed = LibraryIndexer.index(entries, id, generation)
+            var indexed = LibraryIndexer.index(entries, id, generation)
             Log.i(
                 "WhispScan",
                 "Listed ${entries.size} files; indexed ${indexed.works.size} works, ${indexed.tracks.size} tracks",
             )
-            require(indexed.tracks.isNotEmpty()) { "目录中未找到音频，请检查来源目录" }
+            require(
+                indexed.tracks.isNotEmpty() ||
+                    source.lastScan > 0 ||
+                    dao.sourceWorkIds(id).isNotEmpty(),
+            ) {
+                "目录中未找到音频，请检查来源目录"
+            }
             currentCoroutineContext().ensureActive()
             var savedTracks: List<TrackEntity> = emptyList()
+            var obsoleteTracks = emptyList<String>()
             database.withTransaction {
+                val latestSource = dao.source(id) ?: throw IOException("来源已移除")
                 val oldWorks = dao.allWorks().associateBy { it.id }
                 val oldTracks = dao.allTracks().associateBy { it.id }
+                val previousLocations = dao.sourceLocations(id)
+                val previousAssets = previousLocations.map { it.assetId }.toSet()
+                val affectedWorks =
+                    oldTracks.values.filter { it.id in previousAssets }.map { it.workId }
+                indexed =
+                    preserveScanIdentity(
+                        indexed,
+                        oldWorks.values.toList(),
+                        oldTracks.values.toList(),
+                        previousLocations,
+                        id,
+                    )
+                val indexedAttachments = indexed.attachments.map { it.id }.toSet()
+                val attachmentsByWork = indexed.attachments.groupBy { it.workId }
                 dao.putWorks(
                     indexed.works.map { new ->
-                        oldWorks[new.id]?.let { old ->
-                            new.copy(
-                                title = old.title,
-                                artist = old.artist,
-                                originalTitle =
-                                    if (old.coverUrl != null) old.originalTitle
-                                    else new.originalTitle,
-                                series = if (old.coverUrl != null) old.series else new.series,
-                                favorite = old.favorite,
-                                coverId = old.coverId ?: new.coverId,
-                                coverUrl = old.coverUrl,
-                                originalArtist = old.originalArtist,
-                                addedAt = old.addedAt,
-                                offlineAttachments = old.offlineAttachments,
-                            )
-                        } ?: new
+                        oldWorks[new.id]
+                            ?.let { old ->
+                                new.copy(
+                                    title = old.title,
+                                    artist = old.artist,
+                                    originalTitle =
+                                        if (old.coverUrl != null) old.originalTitle
+                                        else new.originalTitle,
+                                    series = if (old.coverUrl != null) old.series else new.series,
+                                    favorite = old.favorite,
+                                    coverId =
+                                        old.coverId?.takeIf { cover ->
+                                            old.coverUrl != null ||
+                                                cover == stableId("${old.id}|custom-cover") ||
+                                                cover in indexedAttachments ||
+                                                File(offlineDir, cover).isFile
+                                        } ?: new.coverId,
+                                    coverUrl = old.coverUrl,
+                                    originalArtist = old.originalArtist,
+                                    addedAt = old.addedAt,
+                                    offlineAttachments = old.offlineAttachments,
+                                )
+                            }
+                            ?.let { saved ->
+                                saved.copy(
+                                    offlineAttachments =
+                                        saved.offlineAttachments &&
+                                            offlineFilesPresent(
+                                                saved,
+                                                attachmentsByWork[saved.id].orEmpty(),
+                                            ),
+                                )
+                            } ?: new
                     },
                 )
                 savedTracks =
@@ -1155,8 +1334,27 @@ class LibraryRepository(val context: Context) {
                 dao.putAttachments(indexed.attachments)
                 dao.putLocations(indexed.locations)
                 dao.removeStaleLocations(id, generation)
-                dao.putSource(source.copy(lastScan = generation, error = null))
+                val changedWorks = (affectedWorks + indexed.works.map { it.id }).distinct()
+                obsoleteTracks =
+                    changedWorks
+                        .chunked(500)
+                        .flatMap { dao.unlocatedTracks(it) }
+                        .filter {
+                            downloadManager.downloadIndex.getDownload(it.id)?.state !=
+                                Download.STATE_COMPLETED && !File(offlineDir, it.id).isFile
+                        }
+                        .map { it.id }
+                obsoleteTracks.chunked(500).forEach { dao.deleteTracks(it) }
+                val obsoleteAttachments =
+                    changedWorks
+                        .chunked(500)
+                        .flatMap { dao.unlocatedAttachments(it) }
+                        .filter { !File(offlineDir, it.id).isFile }
+                        .map { it.id }
+                obsoleteAttachments.chunked(500).forEach { dao.deleteAttachments(it) }
+                dao.putSource(latestSource.copy(lastScan = generation, error = null))
             }
+            removeObsoleteDownloads(obsoleteTracks)
             Log.i(
                 "WhispScan",
                 "Library saved in ${android.os.SystemClock.elapsedRealtime() - startTime} ms",
@@ -1168,12 +1366,40 @@ class LibraryRepository(val context: Context) {
             )
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            dao.putSource(source.copy(error = error.message ?: "来源不可用"))
-            messages.tryEmit("${source.name}：${error.message ?: "扫描失败"}")
+            if (scanOwners[id] !== owner)
+                throw CancellationException("扫描已被替换").apply { initCause(error) }
+            suspend fun reportError() {
+                database.withTransaction {
+                    if (scanOwners[id] !== owner)
+                        throw CancellationException("扫描已被替换").apply { initCause(error) }
+                    dao.source(id)?.let { latest ->
+                        if (
+                            latest.kind == source.kind &&
+                                latest.root == source.root &&
+                                latest.username == source.username &&
+                                (dlsiteClient != null || latest.secret == source.secret)
+                        ) {
+                            dao.updateSourceError(id, error.message ?: "来源不可用")
+                            messages.tryEmit("${latest.name}：${error.message ?: "扫描失败"}")
+                        }
+                    }
+                }
+            }
+            if (source.kind == "dlsite") {
+                dlsiteCookieWrites.withLock {
+                    dlsiteClient?.let { requireDlsiteClient(id, it) }
+                    reportError()
+                }
+            } else reportError()
             Log.w("WhispScan", "Scan failed: ${error.javaClass.simpleName}")
             throw error
         } finally {
-            busy.update { it - id }
+            synchronized(scanOwners) {
+                if (scanOwners[id] === owner) {
+                    scanOwners.remove(id)
+                    busy.update { it - id }
+                }
+            }
         }
     }
 
@@ -1295,7 +1521,10 @@ class LibraryRepository(val context: Context) {
                     ?.tracks
                     .orEmpty()
                     .onEach { streamingCache.removeResource(it.id) }
-                    .filter { downloads.value[it.id]?.state != Download.STATE_COMPLETED }
+                    .filter {
+                        downloadManager.downloadIndex.getDownload(it.id)?.state !=
+                            Download.STATE_COMPLETED
+                    }
                     .forEach {
                         DownloadService.sendRemoveDownload(
                             context,
@@ -1338,6 +1567,18 @@ class LibraryRepository(val context: Context) {
             else -> location.uri
         }
     }
+
+    suspend fun availableTracks(tracks: List<TrackEntity>): List<TrackEntity> =
+        withContext(Dispatchers.IO) {
+            val located =
+                tracks.map { it.id }.chunked(500).flatMap { dao.locatedAssets(it) }.toSet()
+            tracks.filter {
+                it.id in located ||
+                    File(offlineDir, it.id).isFile ||
+                    downloadManager.downloadIndex.getDownload(it.id)?.state ==
+                        Download.STATE_COMPLETED
+            }
+        }
 
     fun artwork(id: String?): File? = id?.let { asset ->
         File(offlineDir, asset).takeIf { it.isFile }
@@ -1597,28 +1838,44 @@ class LibraryRepository(val context: Context) {
 
     suspend fun setCover(work: WorkEntity, uri: Uri) =
         withContext(Dispatchers.IO) {
-            val id = stableId("${work.id}|custom-cover")
-            val bytes =
-                context.contentResolver.openInputStream(uri)?.use {
-                    boundedRead(it, 16 * 1024 * 1024)
-                } ?: error("无法读取图片")
-            atomicFile(File(customArtworkDir, id), bytes)
-            File(offlineDir, id).takeIf { it.isFile }?.let { atomicFile(it, bytes) }
-            dao.putWorks(listOf(work.copy(coverId = id)))
-            artworkRevision.update { it + 1 }
-            storageChanged()
+            onlineWorkChanges.withLock {
+                val latest = dao.work(work.id) ?: throw IOException("作品已删除")
+                val id = stableId("${work.id}|custom-cover")
+                val bytes =
+                    context.contentResolver.openInputStream(uri)?.use {
+                        boundedRead(it, 16 * 1024 * 1024)
+                    } ?: error("无法读取图片")
+                atomicFile(File(customArtworkDir, id), bytes)
+                if (latest.offlineAttachments) atomicFile(File(offlineDir, id), bytes)
+                dao.updateWorkCover(work.id, id)
+                artworkRevision.update { it + 1 }
+                storageChanged()
+            }
         }
 
+    suspend fun editWorkIdentity(id: String, title: String, artist: String) {
+        dao.updateWorkIdentity(id, title, artist)
+    }
+
     suspend fun removeOffline(id: String) {
-        val detail = dao.details(id) ?: return
         WorkManager.getInstance(context).cancelUniqueWork("attachments-$id")
-        detail.tracks.forEach { track ->
-            DownloadService.sendRemoveDownload(context, OfflineService::class.java, track.id, false)
+        onlineWorkChanges.withLock {
+            val detail = dao.details(id) ?: return@withLock
+            detail.tracks.forEach { track ->
+                DownloadService.sendRemoveDownload(
+                    context,
+                    OfflineService::class.java,
+                    track.id,
+                    false,
+                )
+            }
+            detail.attachments.forEach { File(offlineDir, it.id).delete() }
+            detail.work.coverId?.let {
+                if (!dao.otherOfflineCover(it, id)) File(offlineDir, it).delete()
+            }
+            dao.attachmentsReady(id, false)
+            storageChanged()
         }
-        detail.attachments.forEach { File(offlineDir, it.id).delete() }
-        detail.work.coverId?.let { File(offlineDir, it).delete() }
-        dao.attachmentsReady(id, false)
-        storageChanged()
     }
 
     fun isOffline(detail: WorkDetails): Boolean =

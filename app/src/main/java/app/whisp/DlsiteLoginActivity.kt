@@ -4,6 +4,7 @@ package app.whisp
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.*
 import androidx.activity.ComponentActivity
@@ -29,6 +30,8 @@ import kotlinx.coroutines.launch
 class DlsiteLoginActivity : ComponentActivity() {
     companion object {
         const val SOURCE = "dlsite-source"
+        private const val BROWSER_STATE = "dlsite-browser-state"
+        private const val SESSION_READY = "dlsite-session-ready"
     }
 
     private var browser: WebView? = null
@@ -73,9 +76,12 @@ class DlsiteLoginActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
-        CookieManager.getInstance().removeAllCookies {
-            if (!isFinishing) ready = true
-        }
+        val restoredBrowser = savedInstanceState?.getBundle(BROWSER_STATE)
+        if (savedInstanceState?.getBoolean(SESSION_READY) == true) ready = true
+        else
+            CookieManager.getInstance().removeAllCookies {
+                if (!isFinishing && !isDestroyed) ready = true
+            }
         setContent {
             WhispTheme {
                 Scaffold(
@@ -153,8 +159,20 @@ class DlsiteLoginActivity : ComponentActivity() {
                                                         verify()
                                                 }
                                             }
-                                        loadUrl("https://play.dlsite.com/login/?to=%2Flibrary")
+                                        if (
+                                            restoredBrowser == null ||
+                                                restoreState(restoredBrowser) == null
+                                        )
+                                            loadUrl("https://play.dlsite.com/login/?to=%2Flibrary")
                                     }
+                                },
+                                onRelease = { view ->
+                                    if (browser === view) browser = null
+                                    (view.parent as? ViewGroup)?.removeView(view)
+                                    view.stopLoading()
+                                    view.clearHistory()
+                                    view.clearCache(true)
+                                    view.destroy()
                                 },
                             )
                     }
@@ -190,17 +208,24 @@ class DlsiteLoginActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(SESSION_READY, ready)
+        browser?.let { view ->
+            val state = Bundle()
+            if (view.saveState(state) != null) outState.putBundle(BROWSER_STATE, state)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onDestroy() {
         closing = true
-        browser?.apply {
-            stopLoading()
-            clearHistory()
-            clearCache(true)
-            destroy()
+        browser?.stopLoading()
+        // Rotation replaces the view, while the official login session remains active.
+        // Clear browser credentials and storage when the user actually leaves this screen.
+        if (!isChangingConfigurations) {
+            CookieManager.getInstance().removeAllCookies { CookieManager.getInstance().flush() }
+            WebStorage.getInstance().deleteAllData()
         }
-        browser = null
-        CookieManager.getInstance().removeAllCookies { CookieManager.getInstance().flush() }
-        WebStorage.getInstance().deleteAllData()
         super.onDestroy()
     }
 }

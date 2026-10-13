@@ -98,6 +98,12 @@ adb shell am instrument --user 0 -w -e class app.whisp.DlsiteLiveIntegrationTest
 
 ## 提交前检查
 
+`ScannedIdentityTest` 验证本地目录增删音轨后的身份连续性，以及版本差异、未知大小和多重匹配的保守处理。`RepositoryMutationIntegrationTest` 覆盖扫描与来源更新、作品编辑、离线删除、共享封面和下载清理之间的并发行为。
+
+`PlaybackRegressionIntegrationTest` 验证继续播放、文件结尾 A–B 循环和部分离线队列。`PlaybackSubtitleRetryIntegrationTest` 与 `PlayerStateUiIntegrationTest` 验证字幕恢复和播放器实际队列；`SourceNavigationIntegrationTest` 与 `DlsiteLoginLifecycleIntegrationTest` 验证导航、编辑草稿和官方登录页重建。这些测试使用隔离包与合成数据。
+
+`DlsiteScanLifecycleIntegrationTest` 验证重新登录与扫描交错时的会话归属、结果提交和忙碌状态，网络响应由设备内 MockWebServer 提供。
+
 ```sh
 python3 tools/check-public-content.py
 git diff --cached --check

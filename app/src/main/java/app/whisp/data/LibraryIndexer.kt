@@ -31,8 +31,7 @@ object LibraryIndexer {
 
     private fun stem(name: String) =
         name
-            .removeSuffix(".vtt")
-            .removeSuffix(".lrc")
+            .replace(Regex("\\.(vtt|lrc)$", RegexOption.IGNORE_CASE), "")
             .replace(
                 Regex(
                     "\\.(mp3|m4a|flac|wav|ogg|opus|aac|txt|jpg|jpeg|png|webp|pdf)$",
@@ -184,7 +183,9 @@ object LibraryIndexer {
                     val fileName = file.path.basename()
                     val relative = file.path.removePrefix("$root/")
                     val sameName =
-                        resources.entries.filter { stem(it.key.path.basename()) == stem(fileName) }
+                        resources.entries.filter {
+                            stem(it.key.path.basename()).equals(stem(fileName), ignoreCase = true)
+                        }
                     // Exact stem wins; script folders sometimes prefix the work's code.
                     fun match(kind: String) =
                         sameName
@@ -202,9 +203,18 @@ object LibraryIndexer {
                     val subtitle =
                         sameName
                             .filter { it.value.kind == "subtitle" }
-                            .minByOrNull {
-                                if (it.key.path.extension() == "vtt") 0 else 1
-                            }
+                            .minWithOrNull(
+                                compareBy<Map.Entry<FileEntry, AttachmentEntity>> {
+                                        if (
+                                            it.key.path.substringBeforeLast('/', "") ==
+                                                file.path.substringBeforeLast('/', "")
+                                        )
+                                            0
+                                        else 1
+                                    }
+                                    .thenBy { if (it.key.path.extension() == "vtt") 0 else 1 }
+                                    .thenBy { it.key.path },
+                            )
                             ?.value
                             ?.id
                     val track =

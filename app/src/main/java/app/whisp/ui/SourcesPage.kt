@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -25,8 +26,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadService
 import app.whisp.DlsiteLoginActivity
-import app.whisp.data.SourceEntity
 import app.whisp.playback.OfflineService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -41,9 +42,9 @@ internal fun SourcesPage(
     val busy by model.busy.collectAsStateWithLifecycle()
     val downloads by model.downloads.collectAsStateWithLifecycle()
     val library by model.library.collectAsStateWithLifecycle()
-    var adding by remember { mutableStateOf(false) }
-    var remote by remember { mutableStateOf<String?>(null) }
-    var selected by remember { mutableStateOf<SourceEntity?>(null) }
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var remote by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     val login =
         rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result
             ->
@@ -90,7 +91,7 @@ internal fun SourcesPage(
                         when (source.kind) {
                             "asmrone" -> online(source.id)
                             "dlsite" -> dlsite(source.id)
-                            else -> selected = source
+                            else -> selectedId = source.id
                         }
                     }
                     .padding(start = 18.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
@@ -124,7 +125,7 @@ internal fun SourcesPage(
                     )
                 else if (source.kind in setOf("asmrone", "dlsite"))
                     IconAction(Icons.Outlined.MoreVert, "管理${source.name}", Muted) {
-                        selected = source
+                        selectedId = source.id
                     }
                 else
                     IconAction(Icons.Outlined.Refresh, "刷新${source.name}", Muted) {
@@ -273,75 +274,77 @@ internal fun SourcesPage(
             },
             confirmButton = { TextButton(onClick = { adding = false }) { Text("取消") } },
         )
-    selected?.let { source ->
-        AlertDialog(
-            onDismissRequest = { selected = null },
-            containerColor = Surface,
-            title = { Text(source.name) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (source.kind !in setOf("asmrone", "dlsite"))
-                        Text(source.root, color = Muted, fontSize = 13.sp)
-                    source.error?.let { Text(it, color = Rose) }
-                    if (source.kind == "asmrone")
-                        TextButton(
-                            onClick = {
-                                model.repository.scheduleScan(source.id)
-                                selected = null
-                            },
-                        ) {
-                            Text("更新已加入作品")
-                        }
-                    if (source.kind == "dlsite") {
-                        TextButton(
-                            onClick = {
-                                selected = null
-                                login.launch(
-                                    Intent(
-                                            model.repository.context,
-                                            DlsiteLoginActivity::class.java,
-                                        )
-                                        .putExtra(DlsiteLoginActivity.SOURCE, source.id),
-                                )
-                            },
-                        ) {
-                            Text("重新登录")
-                        }
-                        TextButton(
-                            onClick = {
-                                model.repository.scheduleScan(source.id)
-                                selected = null
-                            },
-                        ) {
-                            Text("同步已购作品")
+    sources
+        .firstOrNull { it.id == selectedId }
+        ?.let { source ->
+            AlertDialog(
+                onDismissRequest = { selectedId = null },
+                containerColor = Surface,
+                title = { Text(source.name) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (source.kind !in setOf("asmrone", "dlsite"))
+                            Text(source.root, color = Muted, fontSize = 13.sp)
+                        source.error?.let { Text(it, color = Rose) }
+                        if (source.kind == "asmrone")
+                            TextButton(
+                                onClick = {
+                                    model.repository.scheduleScan(source.id)
+                                    selectedId = null
+                                },
+                            ) {
+                                Text("更新已加入作品")
+                            }
+                        if (source.kind == "dlsite") {
+                            TextButton(
+                                onClick = {
+                                    selectedId = null
+                                    login.launch(
+                                        Intent(
+                                                model.repository.context,
+                                                DlsiteLoginActivity::class.java,
+                                            )
+                                            .putExtra(DlsiteLoginActivity.SOURCE, source.id),
+                                    )
+                                },
+                            ) {
+                                Text("重新登录")
+                            }
+                            TextButton(
+                                onClick = {
+                                    model.repository.scheduleScan(source.id)
+                                    selectedId = null
+                                },
+                            ) {
+                                Text("同步已购作品")
+                            }
                         }
                     }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (source.kind == "asmrone") online(source.id)
-                        else if (source.kind == "dlsite") dlsite(source.id)
-                        else model.repository.scheduleScan(source.id)
-                        selected = null
-                    },
-                ) {
-                    Text(if (source.kind in setOf("asmrone", "dlsite")) "浏览" else "刷新")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        model.removeSource(source.id)
-                        selected = null
-                    },
-                ) {
-                    Text(if (source.kind == "dlsite") "退出账号" else "移除来源")
-                }
-            },
-        )
-    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (source.kind == "asmrone") online(source.id)
+                            else if (source.kind == "dlsite") dlsite(source.id)
+                            else model.repository.scheduleScan(source.id)
+                            selectedId = null
+                        },
+                    ) {
+                        Text(if (source.kind in setOf("asmrone", "dlsite")) "浏览" else "刷新")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            model.removeSource(source.id)
+                            selectedId = null
+                        },
+                    ) {
+                        Text(if (source.kind == "dlsite") "退出账号" else "移除来源")
+                    }
+                },
+            )
+        }
     remote?.let { kind -> RemoteDialog(model, kind) { remote = null } }
 }
 
@@ -404,6 +407,8 @@ private fun RemoteDialog(model: AppViewModel, kind: String, dismiss: () -> Unit)
                                 model.repository.addSmb(name, address, username, password)
                             else model.repository.addWebDav(name, address, username, password)
                             dismiss()
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             error = e.message ?: "连接失败"
                         } finally {

@@ -26,6 +26,12 @@ import kotlinx.coroutines.ensureActive
  * Each operation owns its session; playback, scans and downloads cannot close each other's handles.
  */
 class SmbClient(private val report: (String) -> Unit = {}) {
+    interface ReadHandle : Closeable {
+        val length: Long
+
+        fun read(buffer: ByteArray, offset: Long, bufferOffset: Int, count: Int): Int
+    }
+
     private val config =
         SmbConfig.builder()
             .withAuthenticators(NtlmAuthenticator.Factory())
@@ -197,11 +203,11 @@ class SmbClient(private val report: (String) -> Unit = {}) {
         private val source: SourceEntity,
         private val password: String,
         uri: String,
-    ) : Closeable {
+    ) : ReadHandle {
         private val relative = SmbAddress.assetPath(uri, source.id)
         private var disk: Disk? = null
         private var file: com.hierynomus.smbj.share.File? = null
-        var length: Long = 0
+        override var length: Long = 0
             private set
 
         init {
@@ -219,7 +225,7 @@ class SmbClient(private val report: (String) -> Unit = {}) {
             }
         }
 
-        fun read(buffer: ByteArray, offset: Long, bufferOffset: Int, count: Int): Int {
+        override fun read(buffer: ByteArray, offset: Long, bufferOffset: Int, count: Int): Int {
             require(offset >= 0)
             if (count == 0) return 0
             if (offset >= length) return -1

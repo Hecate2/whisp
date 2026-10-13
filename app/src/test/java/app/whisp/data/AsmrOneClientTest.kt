@@ -125,6 +125,30 @@ class AsmrOneClientTest {
     }
 
     @Test
+    fun audioTitlesWithPunctuationKeepTheActualMediaFormat() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                response(
+                    """[
+                    {"type":"audio","title":"01. 示例","mediaStreamUrl":"https://media.example/audio.wav?download=1"},
+                    {"type":"audio","title":"02_示例.ver2","mediaStreamUrl":"https://media.example/opaque"},
+                    {"type":"audio","title":"03_示例.FLAC","mediaStreamUrl":"https://media.example/opaque"}
+                    ]""",
+                ),
+            )
+            val result =
+                AsmrOneClient(okhttp3.OkHttpClient(), server.url("/"))
+                    .index(AsmrWork(1, "示例作品", "RJ00000001", "", null), "source", 1)
+            assertEquals(
+                listOf("01. 示例.wav", "02_示例.ver2.mp3", "03_示例.FLAC"),
+                result.tracks.map { it.relativePath },
+            )
+            assertEquals(3, result.locations.size)
+        }
+    }
+
+    @Test
     fun resourceUrlsRequireHttpsAndSeparateCredentials() = runBlocking {
         MockWebServer().use { server ->
             server.start()

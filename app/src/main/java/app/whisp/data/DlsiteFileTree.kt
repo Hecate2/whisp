@@ -73,12 +73,21 @@ object DlsiteFileTree {
                     val extension = optimized.text("name").substringAfterLast('.', "").lowercase()
                     if (extension !in setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus"))
                         return@forEach
-                    val relative = path.substringBeforeLast('.', path) + ".$extension"
+                    val stem = name.substringBeforeLast('.', name)
+                    val relative =
+                        listOf(parent, "$stem.$extension")
+                            .filter(String::isNotBlank)
+                            .joinToString("/")
                     val id = stableId("${entity.id}|$path|$hash")
                     val seconds = optimized["duration"]?.jsonPrimitive?.doubleOrNull ?: 0.0
                     val subtitle =
                         audio.text("vtt").takeIf(String::isNotBlank)?.let {
-                            subtitle(it, path.substringBeforeLast('.', path) + ".vtt")
+                            subtitle(
+                                it,
+                                listOf(parent, "$stem.vtt")
+                                    .filter(String::isNotBlank)
+                                    .joinToString("/"),
+                            )
                         }
                     tracks +=
                         TrackEntity(

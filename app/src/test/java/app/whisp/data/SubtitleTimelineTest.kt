@@ -46,6 +46,22 @@ class SubtitleTimelineTest {
     }
 
     @Test
+    fun lrcKeepsParallelLinesAtTheSameTimestamp() {
+        val cues = SubtitleTimeline.lrc("[00:01.00]Original\n[00:01.00]Translation\n[00:03.00]Next")
+        assertEquals(2, cues.size)
+        assertEquals(Cue(1000, 3000, "Original\nTranslation"), cues.first())
+        assertEquals(0, SubtitleTimeline.current(cues, 1500))
+    }
+
+    @Test
+    fun lrcOffsetsClampedToZeroRetainEveryLineAndProduceValidIntervals() {
+        val cues =
+            SubtitleTimeline.lrc("[offset:-2000]\n[00:00.50]One\n[00:01.00]Two\n[00:03.00]Three")
+        assertEquals(Cue(0, 1000, "One\nTwo"), cues.first())
+        assertTrue(cues.all { it.endMs > it.startMs })
+    }
+
+    @Test
     fun malformedCueDoesNotBreakRestOfFile() {
         val cues =
             SubtitleTimeline.vtt(

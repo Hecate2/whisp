@@ -127,7 +127,17 @@ class AsmrOneClient(
                 if (raw.isBlank()) continue
                 val url = resourceUrl(raw)
                 val audio = node.text("type") == "audio"
-                val filePath = if (audio && '.' !in name) "$path.mp3" else path
+                val audioExtensions = setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus")
+                val filePath =
+                    if (audio && name.substringAfterLast('.', "").lowercase() !in audioExtensions) {
+                        val extension =
+                            url.pathSegments
+                                .lastOrNull()
+                                ?.substringAfterLast('.', "")
+                                ?.lowercase()
+                                ?.takeIf { it in audioExtensions } ?: "mp3"
+                        "$path.$extension"
+                    } else path
                 require(paths.add(filePath)) { "作品目录存在重复文件名" }
                 files +=
                     FileEntry(

@@ -82,10 +82,11 @@ class WebDavClient(private val http: OkHttpClient) {
         fun sameOrigin(a: HttpUrl, b: HttpUrl) =
             a.scheme == b.scheme && a.host == b.host && a.port == b.port
 
-        fun insideRoot(url: HttpUrl, root: HttpUrl) =
-            sameOrigin(url, root) &&
-                (url.encodedPath == root.encodedPath.trimEnd('/') ||
-                    url.encodedPath.startsWith(root.encodedPath))
+        fun insideRoot(url: HttpUrl, root: HttpUrl): Boolean {
+            val path = root.encodedPath.trimEnd('/')
+            return sameOrigin(url, root) &&
+                (url.encodedPath == path || url.encodedPath.startsWith("$path/"))
+        }
 
         fun parse(bytes: ByteArray, requested: HttpUrl): List<DavEntry> {
             require(
@@ -166,23 +167,25 @@ class WebDavClient(private val http: OkHttpClient) {
         return builder
     }
 
-    fun list(url: HttpUrl, source: SourceEntity, password: String): List<DavEntry> {
+    private fun listRequest(url: HttpUrl, source: SourceEntity, password: String): Request {
         val body =
             """<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
-        val request =
-            authorize(
-                    Request.Builder()
-                        .url(url)
-                        .header("Depth", "1")
-                        .method(
-                            "PROPFIND",
-                            body.toRequestBody("application/xml; charset=utf-8".toMediaType()),
-                        ),
-                    source,
-                    password,
-                )
-                .build()
-        http.newCall(request).execute().use { response ->
+        return authorize(
+                Request.Builder()
+                    .url(url)
+                    .header("Depth", "1")
+                    .method(
+                        "PROPFIND",
+                        body.toRequestBody("application/xml; charset=utf-8".toMediaType()),
+                    ),
+                source,
+                password,
+            )
+            .build()
+    }
+
+    fun list(url: HttpUrl, source: SourceEntity, password: String): List<DavEntry> {
+        http.newCall(listRequest(url, source, password)).execute().use { response ->
             if (!response.isSuccessful) throw IOException("目录访问失败（${response.code}）")
             val bytes = response.body.byteStream().use { boundedRead(it, 8 * 1024 * 1024) }
             return parse(bytes, url)
@@ -200,7 +203,9 @@ class WebDavClient(private val http: OkHttpClient) {
                 check(seen.size < 10_000 && files.size < 100_000) { "目录过大" }
                 val directory = pending.removeFirst()
                 if (!seen.add(directory.toString().trimEnd('/'))) continue
-                list(directory, source, password).forEach { entry ->
+                val bytes =
+                    http.onlineBytes(listRequest(directory, source, password), 8 * 1024 * 1024)
+                parse(bytes, directory).forEach { entry ->
                     if (!insideRoot(entry.url, root)) return@forEach
                     if (entry.url.encodedPath.trimEnd('/') == directory.encodedPath.trimEnd('/'))
                         return@forEach

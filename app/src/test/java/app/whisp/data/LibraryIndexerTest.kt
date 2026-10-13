@@ -117,4 +117,41 @@ class LibraryIndexerTest {
             indexed.attachments.single { it.id == indexed.works.single().coverId }.fileName,
         )
     }
+
+    @Test
+    fun captionsUseTheMatchingRecordingDirectoryBeforeFormatPreference() {
+        val indexed =
+            LibraryIndexer.index(
+                listOf(
+                    file("RJ00000001 Example/wav/01_Intro.wav"),
+                    file("RJ00000001 Example/wav/01_Intro.vtt"),
+                    file("RJ00000001 Example/mp3/01_Intro.mp3"),
+                    file("RJ00000001 Example/mp3/01_Intro.lrc"),
+                ),
+                "source",
+                1,
+            )
+        val captions = indexed.attachments.associateBy { it.id }
+        for (track in indexed.tracks) {
+            assertEquals(
+                track.relativePath.substringBeforeLast('/'),
+                captions.getValue(track.subtitleId!!).relativePath.substringBeforeLast('/'),
+            )
+        }
+    }
+
+    @Test
+    fun uppercaseDoubleExtensionCaptionsMatchAudio() {
+        val indexed =
+            LibraryIndexer.index(
+                listOf(
+                    file("RJ00000001 Example/01_Intro.MP3"),
+                    file("RJ00000001 Example/01_INTRO.MP3.VTT"),
+                ),
+                "source",
+                1,
+            )
+        assertEquals(indexed.attachments.single().id, indexed.tracks.single().subtitleId)
+        assertEquals("INTRO", indexed.attachments.single().title)
+    }
 }

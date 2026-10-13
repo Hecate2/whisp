@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.*
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.Credentials
@@ -58,6 +60,31 @@ class WebDavClientTest {
         assertFalse(
             WebDavClient.insideRoot("https://nas.example:8443/ASMR/track.mp3".toHttpUrl(), root),
         )
+        assertFalse(
+            WebDavClient.insideRoot(
+                "https://nas.example/ASMR-other/track.mp3".toHttpUrl(),
+                "https://nas.example/ASMR".toHttpUrl(),
+            ),
+        )
+    }
+
+    @Test
+    fun cancellingScanStopsTheDirectoryRequestBeforeItsBodyArrives() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(207)
+                    .body("""<d:multistatus xmlns:d="DAV:"/>""")
+                    .bodyDelay(3, TimeUnit.SECONDS)
+                    .build(),
+            )
+            val source = SourceEntity("source", "示例 NAS", "webdav", server.url("/ASMR/").toString())
+            val scan = launch(Dispatchers.Default) { WebDavClient(OkHttpClient()).walk(source, "") }
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            withTimeout(2000) { scan.cancelAndJoin() }
+            assertTrue(scan.isCancelled)
+        }
     }
 
     @Test(expected = IllegalArgumentException::class)

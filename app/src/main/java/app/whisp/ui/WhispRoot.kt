@@ -166,6 +166,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
         val library by model.library.collectAsStateWithLifecycle()
         val sources by model.sources.collectAsStateWithLifecycle()
         val state by model.player.collectAsStateWithLifecycle()
+        val queueTracks by model.queueTracks.collectAsStateWithLifecycle()
         val progress by model.progress.collectAsStateWithLifecycle()
         val opening by model.openingTrackId.collectAsStateWithLifecycle()
         val error by model.error.collectAsStateWithLifecycle()
@@ -216,18 +217,27 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                     library.forEach { work -> work.tracks.forEach { put(it.id, work to it) } }
                 }
             }
-        val selected = tracksById[displayedId]
+        val selected =
+            tracksById[displayedId]
+                ?: queueTracks
+                    .firstOrNull { it.id == displayedId }
+                    ?.let { track ->
+                        worksById[track.workId]?.let { work -> work to track }
+                    }
         val current = selected?.first ?: progress.firstOrNull()?.let { worksById[it.workId] }
         val currentTrack =
             selected?.second
                 ?: tracksById[progress.firstOrNull()?.trackId]?.second?.takeIf {
                     it.workId == current?.work?.id
                 }
-        fun push(next: Route) {
-            if (stack.last() != next) {
+        fun push(next: Route, from: Route? = null) {
+            if ((from == null || stack.lastOrNull() == from) && stack.last() != next) {
                 backFallback.isEnabled = true
                 stack.add(next)
             }
+        }
+        fun pop(expected: Route) {
+            if (stack.size > 1 && stack.lastOrNull() == expected) stack.removeAt(stack.lastIndex)
         }
         LaunchedEffect(playerRequest, current?.work?.id) {
             if (playerRequest > handledPlayerRequest && current != null) {
@@ -387,22 +397,16 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                         library,
                                                         destination.page == "favorites",
                                                         model,
-                                                        { push(Route("detail", it)) },
-                                                        { push(Route("sources")) },
+                                                        { push(Route("detail", it), destination) },
+                                                        { push(Route("sources"), destination) },
                                                     )
                                                 "detail" ->
                                                     worksById[destination.id]?.let {
                                                         DetailPage(
                                                             it,
                                                             model,
-                                                            {
-                                                                if (
-                                                                    stack.lastOrNull() ==
-                                                                        destination
-                                                                )
-                                                                    stack.removeAt(stack.lastIndex)
-                                                            },
-                                                            { push(Route("player")) },
+                                                            { pop(destination) },
+                                                            { push(Route("player"), destination) },
                                                             sources
                                                                 .firstOrNull { source ->
                                                                     source.kind == "asmrone"
@@ -421,6 +425,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                                                 "asmrone",
                                                                                 source.id,
                                                                             ),
+                                                                            destination,
                                                                         )
                                                                     }
                                                                 },
@@ -431,40 +436,28 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                         current,
                                                         currentTrack,
                                                         model,
-                                                        {
-                                                            if (stack.size > 1)
-                                                                stack.removeAt(stack.lastIndex)
-                                                        },
+                                                        { pop(destination) },
                                                     )
                                                 "sources" ->
                                                     SourcesPage(
                                                         model,
-                                                        { push(Route("asmrone", it)) },
-                                                        { push(Route("dlsite", it)) },
+                                                        { push(Route("asmrone", it), destination) },
+                                                        { push(Route("dlsite", it), destination) },
                                                     ) {
-                                                        push(Route("storage"))
+                                                        push(Route("storage"), destination)
                                                     }
                                                 "dlsite" ->
                                                     DlsiteLibraryPage(
                                                         model,
                                                         destination.id,
-                                                        {
-                                                            if (stack.size > 1)
-                                                                stack.removeAt(stack.lastIndex)
-                                                        },
-                                                        { push(Route("detail", it)) },
+                                                        { pop(destination) },
+                                                        { push(Route("detail", it), destination) },
                                                     )
                                                 "asmrone" ->
                                                     AsmrOnePage(
                                                         model,
                                                         destination.id,
-                                                        {
-                                                            if (
-                                                                stack.lastOrNull() == destination &&
-                                                                    stack.size > 1
-                                                            )
-                                                                stack.removeAt(stack.lastIndex)
-                                                        },
+                                                        { pop(destination) },
                                                         { work ->
                                                             model.prepareAsmrPreview(
                                                                 destination.id,
@@ -475,6 +468,7 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                                     "asmrpreview",
                                                                     "${destination.id}|${work.id}",
                                                                 ),
+                                                                destination,
                                                             )
                                                         },
                                                     )
@@ -490,27 +484,12 @@ fun WhispRoot(model: AppViewModel, playerRequest: Int = 0) {
                                                             model,
                                                             sourceId,
                                                             id,
-                                                            {
-                                                                if (
-                                                                    stack.lastOrNull() ==
-                                                                        destination
-                                                                )
-                                                                    stack.removeAt(stack.lastIndex)
-                                                            },
-                                                            { push(Route("player")) },
-                                                            {
-                                                                if (
-                                                                    stack.lastOrNull() ==
-                                                                        destination
-                                                                )
-                                                                    stack.removeAt(stack.lastIndex)
-                                                            },
+                                                            { pop(destination) },
+                                                            { push(Route("player"), destination) },
+                                                            { pop(destination) },
                                                         )
                                                 }
-                                                "storage" ->
-                                                    StoragePage(model) {
-                                                        stack.removeAt(stack.lastIndex)
-                                                    }
+                                                "storage" -> StoragePage(model) { pop(destination) }
                                             }
                                         }
                                     }
@@ -815,7 +794,7 @@ private fun DetailPage(
 ) {
     var tab by rememberSaveable(detail.work.id) { mutableStateOf("曲目") }
     val official = rememberDlsiteWork(model, detail.work.id, detail.work.rj, tab)
-    var information by remember { mutableStateOf(false) }
+    var information by rememberSaveable(detail.work.id) { mutableStateOf(false) }
     var attachment by remember { mutableStateOf<AttachmentEntity?>(null) }
     val playback by model.player.collectAsStateWithLifecycle()
     val history by model.progress.collectAsStateWithLifecycle()
@@ -1120,8 +1099,8 @@ private fun InfoDialog(
     onRemoved: () -> Unit,
     dismiss: () -> Unit,
 ) {
-    var title by remember(detail.work.title) { mutableStateOf(detail.work.title) }
-    var artist by remember(detail.work.artist) { mutableStateOf(detail.work.artist) }
+    var title by rememberSaveable(detail.work.id) { mutableStateOf(detail.work.title) }
+    var artist by rememberSaveable(detail.work.id) { mutableStateOf(detail.work.artist) }
     var confirmingRemoval by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -1206,13 +1185,10 @@ private fun InfoDialog(
             TextButton(
                 onClick = {
                     model.action {
-                        model.repository.dao.putWorks(
-                            listOf(
-                                detail.work.copy(
-                                    title = title.ifBlank { detail.work.title },
-                                    artist = artist,
-                                ),
-                            ),
+                        model.repository.editWorkIdentity(
+                            detail.work.id,
+                            title.ifBlank { detail.work.title },
+                            artist,
                         )
                     }
                     dismiss()

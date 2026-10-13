@@ -3,14 +3,17 @@ package app.whisp.data
 
 import android.net.Uri
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.BaseDataSource
+import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
 import java.io.IOException
 
 @androidx.annotation.OptIn(UnstableApi::class)
-class SmbDataSource(private val readerFor: (String) -> SmbClient.Reader) : BaseDataSource(true) {
-    private var reader: SmbClient.Reader? = null
+class SmbDataSource(private val readerFor: (String) -> SmbClient.ReadHandle) :
+    BaseDataSource(true) {
+    private var reader: SmbClient.ReadHandle? = null
     private var spec: DataSpec? = null
     private var position = 0L
     private var remaining = 0L
@@ -20,7 +23,11 @@ class SmbDataSource(private val readerFor: (String) -> SmbClient.Reader) : BaseD
         transferInitializing(dataSpec)
         try {
             reader = readerFor(dataSpec.uri.toString())
-            if (dataSpec.position > reader!!.length) throw IOException("播放位置超出文件长度")
+            if (dataSpec.position > reader!!.length)
+                throw DataSourceException(
+                    "播放位置超出文件长度",
+                    PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+                )
             spec = dataSpec
             position = dataSpec.position
             remaining = reader!!.length - position

@@ -48,6 +48,8 @@ internal fun PlayerPage(
     val state by model.player.collectAsStateWithLifecycle()
     val cues by model.cues.collectAsStateWithLifecycle()
     val loading by model.subtitleLoading.collectAsStateWithLifecycle()
+    val subtitleError by model.subtitleError.collectAsStateWithLifecycle()
+    val queueTracks by model.queueTracks.collectAsStateWithLifecycle()
     val opening by model.openingTrackId.collectAsStateWithLifecycle()
     val settings by model.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -142,11 +144,13 @@ internal fun PlayerPage(
             SubtitlePane(
                 cues,
                 loading,
+                subtitleError,
                 cueState.first,
                 cueState.second,
                 settings.subtitleSize,
                 modifier,
                 onSelect = { subtitleAction = it },
+                onRetry = { model.retrySubtitles(track.id) },
                 onBookmark = { cue ->
                     bookmark =
                         BookmarkDraft(
@@ -258,7 +262,14 @@ internal fun PlayerPage(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconAction(Icons.AutoMirrored.Outlined.QueueMusic, "播放队列", Muted) { queue = true }
+                IconAction(
+                    Icons.AutoMirrored.Outlined.QueueMusic,
+                    "播放队列",
+                    Muted,
+                    enabled = opening == null && queueTracks.isNotEmpty(),
+                ) {
+                    queue = true
+                }
                 IconAction(
                     Icons.Outlined.Bookmarks,
                     "片段",
@@ -300,9 +311,9 @@ internal fun PlayerPage(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
             )
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 500.dp).navigationBarsPadding()) {
-                items(TrackSections.queue(detail.tracks, track.id), key = { it.id }) { item ->
+                items(queueTracks, key = { it.id }) { item ->
                     TrackRow(item, item.id == state.trackId) {
-                        model.playWork(detail, item.id)
+                        model.selectQueuedTrack(item.id)
                         dismiss()
                     }
                 }
@@ -693,11 +704,13 @@ private data class BookmarkDraft(
 private fun SubtitlePane(
     cues: List<Cue>,
     loading: Boolean,
+    error: String?,
     anchor: Int,
     active: Int,
     size: Int,
     modifier: Modifier,
     onSelect: (Cue) -> Unit,
+    onRetry: () -> Unit,
     onBookmark: (Cue) -> Unit,
 ) {
     val list = rememberLazyListState()
@@ -727,6 +740,7 @@ private fun SubtitlePane(
         if (cues.isEmpty()) {
             if (loading)
                 CircularProgressIndicator(Modifier.size(24.dp), color = Rose, strokeWidth = 2.dp)
+            else if (error != null) TextButton(onClick = onRetry) { Text("重试字幕", fontSize = 17.sp) }
             else Text("暂无字幕", color = Muted, fontSize = 17.sp)
         } else
             LazyColumn(

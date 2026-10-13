@@ -154,6 +154,51 @@ class DlsiteAccountClientTest {
     }
 
     @Test
+    fun malformedCommercialPageCannotAdvanceThePurchaseSync() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(body("""{"customer_id":7}"""))
+            server.enqueue(body("""{"user":0,"production":1,"page_limit":100}"""))
+            server.enqueue(body("""{"error":"temporary failure"}"""))
+            val client =
+                DlsiteAccountClient(
+                    DlsiteSession(),
+                    root = server.url("/"),
+                    contentRoot = server.url("/"),
+                    testTransport = true,
+                )
+            try {
+                client.purchases()
+                fail("Incomplete purchase library accepted")
+            } catch (e: java.io.IOException) {
+                assertEquals("DLsite 购买库格式错误", e.message)
+            }
+            assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test
+    fun workResponseMustBelongToTheRequestedPurchase() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(body(owned.replace("RJ00000001", "RJ00000002")))
+            val client =
+                DlsiteAccountClient(
+                    DlsiteSession(),
+                    root = server.url("/"),
+                    contentRoot = server.url("/"),
+                    testTransport = true,
+                )
+            try {
+                client.work("RJ00000001")
+                fail("Different work accepted")
+            } catch (e: IllegalArgumentException) {
+                assertEquals("DLsite 作品编号不匹配", e.message)
+            }
+        }
+    }
+
+    @Test
     fun missingAuthenticationAndUnownedWorkHaveActionableFailures() = runBlocking {
         MockWebServer().use { server ->
             server.start()

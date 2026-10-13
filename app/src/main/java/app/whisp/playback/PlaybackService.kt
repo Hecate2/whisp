@@ -72,6 +72,17 @@ class PlaybackService : MediaLibraryService() {
 
                 override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                     if (!playWhenReady) {
+                        // ExoPlayer owns the exact EOF boundary; polling can miss it and
+                        // advance to the next item before the A–B coroutine wakes up.
+                        if (
+                            reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM &&
+                                loopStart >= 0 &&
+                                loopEnd > loopStart
+                        ) {
+                            seekLoopStart()
+                            player.play()
+                            return
+                        }
                         automaticLoopSeek = false
                         saveProgress()
                     }
@@ -84,13 +95,19 @@ class PlaybackService : MediaLibraryService() {
                         pendingLoopSeek = null
                         loopStart = -1
                         loopEnd = -1
+                        player.setPauseAtEndOfMediaItems(false)
                         publishExtras()
                         saveProgress()
                     }
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_ENDED) player.pause()
+                    if (
+                        playbackState == Player.STATE_ENDED &&
+                            player.playbackState == Player.STATE_ENDED &&
+                            player.playWhenReady
+                    )
+                        player.pause()
                     val id = player.currentMediaItem?.mediaId ?: return
                     val duration = player.duration
                     if (duration > 0)
@@ -135,6 +152,7 @@ class PlaybackService : MediaLibraryService() {
                     ) {
                         loopStart = -1
                         loopEnd = -1
+                        player.setPauseAtEndOfMediaItems(false)
                         publishExtras()
                     }
                     if (!loopSeek) saveProgress()
@@ -284,15 +302,21 @@ class PlaybackService : MediaLibraryService() {
                                 }
                                 LOOP -> {
                                     loopStart = args.getLong("start", -1)
-                                    loopEnd = args.getLong("end", -1)
+                                    val duration = player.duration.takeIf { it > 0 }
+                                    loopEnd =
+                                        args.getLong("end", -1).let {
+                                            if (duration == null) it else it.coerceAtMost(duration)
+                                        }
                                     if (
-                                        loopStart < 0 ||
+                                        player.currentMediaItem == null ||
+                                            loopStart < 0 ||
                                             loopEnd <= loopStart ||
                                             loopEnd - loopStart < 500
                                     ) {
                                         loopStart = -1
                                         loopEnd = -1
                                     }
+                                    player.setPauseAtEndOfMediaItems(loopStart >= 0)
                                     loopJob?.cancel()
                                     loopJob = null
                                     pendingLoopSeek = null
@@ -406,9 +430,7 @@ class PlaybackService : MediaLibraryService() {
                     while (isActive && player.isPlaying && loopStart >= 0 && loopEnd > loopStart) {
                         var remaining = loopEnd - player.currentPosition
                         if (remaining <= 0) {
-                            automaticLoopSeek = true
-                            pendingLoopSeek = player.currentMediaItem?.mediaId to loopStart
-                            player.seekTo(loopStart)
+                            seekLoopStart()
                             remaining = loopEnd - loopStart
                         }
                         delay(LoopSchedule.delayMs(remaining, player.playbackParameters.speed))
@@ -418,6 +440,12 @@ class PlaybackService : MediaLibraryService() {
             loopJob?.cancel()
             loopJob = null
         }
+    }
+
+    private fun seekLoopStart() {
+        automaticLoopSeek = true
+        pendingLoopSeek = player.currentMediaItem?.mediaId to loopStart
+        player.seekTo(loopStart)
     }
 
     private fun scheduleTimer() {

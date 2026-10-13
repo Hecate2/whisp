@@ -35,7 +35,7 @@ class SecretStore {
     }
 
     fun encrypt(value: String): String {
-        if (value.isBlank()) return ""
+        if (value.isEmpty()) return ""
         val cipher =
             Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val bytes = cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
@@ -43,7 +43,7 @@ class SecretStore {
     }
 
     fun decrypt(value: String): String {
-        if (value.isBlank()) return ""
+        if (value.isEmpty()) return ""
         val bytes = Base64.decode(value, Base64.NO_WRAP)
         return Cipher.getInstance("AES/GCM/NoPadding")
             .apply {
