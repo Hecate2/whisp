@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import ipaddress
+import hashlib
 import re
 import subprocess
 import sys
@@ -40,11 +41,26 @@ BLOCKED_SUFFIXES = {
     ".ogg",
     ".opus",
     ".aac",
+    ".mp4",
+    ".m4v",
+    ".mkv",
+    ".webm",
+    ".mov",
+    ".3gp",
+    ".ts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
     ".db",
     ".sqlite",
     ".log",
     ".zip",
 }
+SYNTHETIC_FIXTURES = {
+    "app/src/androidTest/assets/video-portrait-example.mp4": "6a6a356d58d2f3bee2dc4b3cc483a8b8b7aa1599f122fae133e2c7807ea6a896",
+    "app/src/androidTest/assets/video-example.mp4": "ce8830c5f7aed6acd87f15d668cb315288bda07c0884a384af62ff6f5ba580d4",
+}
+
 BLOCKED_PARTS = {
     ".signing",
     ".gradle",
@@ -61,6 +77,10 @@ def git(*args):
 
 
 def inspect(name, data, origin):
+    if name in SYNTHETIC_FIXTURES:
+        if hashlib.sha256(data).hexdigest() == SYNTHETIC_FIXTURES[name]:
+            return []
+        return [f"{origin}:{name}:0: synthetic fixture checksum changed"]
     findings = []
     path = Path(name)
     if (

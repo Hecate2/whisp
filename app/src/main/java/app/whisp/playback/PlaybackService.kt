@@ -40,10 +40,12 @@ class PlaybackService : MediaLibraryService() {
     private var timerJob: Job? = null
     private var pendingLoopSeek: Pair<String?, Long>? = null
     private var automaticLoopSeek = false
+    private var videoController: MediaSession.ControllerInfo? = null
 
     companion object {
         const val TIMER = "whisp.timer"
         const val LOOP = "whisp.loop"
+        const val VIDEO = "whisp.video"
         const val RECENT_ROOT = "whisp.recent"
     }
 
@@ -64,6 +66,7 @@ class PlaybackService : MediaLibraryService() {
                 .setSeekBackIncrementMs(10000)
                 .setSeekForwardIncrementMs(10000)
                 .build()
+        setVideoEnabled(false)
         player.addListener(
             object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -214,12 +217,29 @@ class PlaybackService : MediaLibraryService() {
                                     .add(SessionCommand(TIMER, Bundle.EMPTY))
                                     .add(SessionCommand(LOOP, Bundle.EMPTY))
                                     .build()
+                            val available =
+                                if (controller.packageName == packageName)
+                                    commands
+                                        .buildUpon()
+                                        .add(SessionCommand(VIDEO, Bundle.EMPTY))
+                                        .build()
+                                else commands
                             return MediaSession.ConnectionResult.AcceptedResultBuilder(
                                     session,
                                     controller,
                                 )
-                                .setAvailableSessionCommands(commands)
+                                .setAvailableSessionCommands(available)
                                 .build()
+                        }
+
+                        override fun onDisconnected(
+                            session: MediaSession,
+                            controller: MediaSession.ControllerInfo,
+                        ) {
+                            if (videoController == controller) {
+                                videoController = null
+                                setVideoEnabled(false)
+                            }
                         }
 
                         override fun onGetLibraryRoot(
@@ -293,6 +313,21 @@ class PlaybackService : MediaLibraryService() {
                             args: Bundle,
                         ): ListenableFuture<SessionResult> {
                             when (customCommand.customAction) {
+                                VIDEO -> {
+                                    if (controller.packageName != packageName)
+                                        return Futures.immediateFuture(
+                                            SessionResult(SessionError.ERROR_PERMISSION_DENIED),
+                                        )
+                                    val visible = args.getBoolean("visible")
+                                    if (visible) videoController = controller
+                                    if (videoController == controller) {
+                                        setVideoEnabled(visible)
+                                        if (!visible) videoController = null
+                                    }
+                                    return Futures.immediateFuture(
+                                        SessionResult(SessionResult.RESULT_SUCCESS),
+                                    )
+                                }
                                 TIMER -> {
                                     val minutes = args.getInt("minutes", 0).coerceIn(0, 180)
                                     timerEnd =
@@ -405,6 +440,14 @@ class PlaybackService : MediaLibraryService() {
                     session?.notifyChildrenChanged(RECENT_ROOT, if (hasRecent) 1 else 0, null)
                 }
         }
+    }
+
+    private fun setVideoEnabled(enabled: Boolean) {
+        player.trackSelectionParameters =
+            player.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !enabled)
+                .build()
     }
 
     private fun reconcilePlaybackJobs() {

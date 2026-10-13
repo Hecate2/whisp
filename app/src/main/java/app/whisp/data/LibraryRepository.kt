@@ -1816,7 +1816,10 @@ class LibraryRepository(val context: Context) {
                 .setAlbumTitle(work.title)
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER)
+                .setMediaType(
+                    if (track.isVideo) MediaMetadata.MEDIA_TYPE_VIDEO
+                    else MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER,
+                )
                 .setExtras(android.os.Bundle().apply { putString("workId", work.id) })
         if (!hideArtwork) artwork(work.coverId)?.let { metadata.setArtworkUri(Uri.fromFile(it)) }
         if (hideArtwork) metadata.setTitle("正在收听").setArtist("Whisp").setAlbumTitle("Whisp")
@@ -1828,6 +1831,7 @@ class LibraryRepository(val context: Context) {
         return MediaItem.Builder()
             .setMediaId(track.id)
             .setUri(resolve(track.id))
+            .setMimeType(MediaFormats.videoMimeType(track.fileName))
             .setCustomCacheKey(track.id)
             .setMediaMetadata(mediaMetadata(track, work, hide))
             .build()
@@ -1839,7 +1843,10 @@ class LibraryRepository(val context: Context) {
         for (track in detail.tracks) {
             val uri = resolve(track.id)
             val request =
-                DownloadRequest.Builder(track.id, uri.toUri()).setCustomCacheKey(track.id).build()
+                DownloadRequest.Builder(track.id, uri.toUri())
+                    .setMimeType(MediaFormats.videoMimeType(track.fileName))
+                    .setCustomCacheKey(track.id)
+                    .build()
             DownloadService.sendAddDownload(context, OfflineService::class.java, request, false)
         }
         WorkManager.getInstance(context)

@@ -19,6 +19,32 @@ class AsmrOneClientTest {
     private fun response(body: String) = MockResponse.Builder().body(body).build()
 
     @Test
+    fun videoNodesUseActualContainerDurationAndSharedSubtitleMatching() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                response(
+                    """[
+                {"type":"video","title":"01. 示例画面","mediaStreamUrl":"https://media.example/clip.mkv?revision=1","duration":40.5},
+                {"type":"text","title":"01. 示例画面.srt","mediaStreamUrl":"https://media.example/caption.srt"},
+                {"type":"audio","title":"02. 示例声音.wav","mediaStreamUrl":"https://media.example/audio.wav"}
+            ]""",
+                ),
+            )
+            val result =
+                AsmrOneClient(okhttp3.OkHttpClient(), server.url("/"))
+                    .index(AsmrWork(1, "示例作品", "RJ00000001", "", null), "source", 1)
+            assertEquals(2, result.tracks.size)
+            val video = result.tracks.first()
+            assertTrue(video.isVideo)
+            assertEquals("01. 示例画面.mkv", video.fileName)
+            assertEquals(40500L, video.durationMs)
+            assertNotNull(video.subtitleId)
+            assertFalse(result.tracks.last().isVideo)
+        }
+    }
+
+    @Test
     fun sharedUrlsKeepEachAssetsLocationAcrossWorks() {
         val result =
             LibraryIndexer.index(

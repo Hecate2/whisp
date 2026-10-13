@@ -3,6 +3,7 @@ package app.whisp.data
 
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.text.SubtitleParser
+import androidx.media3.extractor.text.subrip.SubripParser
 import androidx.media3.extractor.text.webvtt.WebvttParser
 
 data class Cue(val startMs: Long, val endMs: Long, val text: String)
@@ -19,14 +20,21 @@ object SubtitleTimeline {
     }
 
     fun parse(content: String, extension: String): List<Cue> =
-        if (extension.lowercase() == "lrc") lrc(content) else vtt(content)
+        when (extension.lowercase()) {
+            "lrc" -> lrc(content)
+            "srt" -> timed(content, SubripParser())
+            else -> vtt(content)
+        }
 
     fun vtt(content: String): List<Cue> {
+        return timed(content, WebvttParser())
+    }
+
+    private fun timed(content: String, parser: SubtitleParser): List<Cue> {
         if (content.isBlank()) return emptyList()
         val bytes = content.removePrefix("\uFEFF").toByteArray(Charsets.UTF_8)
         val result = mutableListOf<Cue>()
-        WebvttParser().parse(bytes, 0, bytes.size, SubtitleParser.OutputOptions.allCues()) { group
-            ->
+        parser.parse(bytes, 0, bytes.size, SubtitleParser.OutputOptions.allCues()) { group ->
             val text = group.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
             val start = group.startTimeUs / 1000
             val end = group.endTimeUs / 1000

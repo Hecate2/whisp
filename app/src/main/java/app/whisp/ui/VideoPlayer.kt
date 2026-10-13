@@ -1,0 +1,231 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+package app.whisp.ui
+
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.compose.PlayerSurface
+import androidx.media3.ui.compose.modifiers.resizeWithContentScale
+import kotlinx.coroutines.delay
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+internal fun VideoOutput(
+    model: AppViewModel,
+    trackId: String,
+    active: Boolean,
+    playing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val player by model.videoPlayer.collectAsStateWithLifecycle()
+    val state by model.player.collectAsStateWithLifecycle()
+    val view = LocalView.current
+    var resumed by remember { mutableStateOf(false) }
+    val owner = remember { Any() }
+    val attached = if (active) player else null
+    LifecycleResumeEffect(model, attached) {
+        resumed = true
+        model.videoVisibility(owner, attached != null)
+        onPauseOrDispose {
+            resumed = false
+            model.videoVisibility(owner, false)
+        }
+    }
+    DisposableEffect(view, resumed, playing) {
+        val previous = view.keepScreenOn
+        view.keepScreenOn = resumed && active && playing
+        onDispose { view.keepScreenOn = previous }
+    }
+    Box(
+        modifier.background(Color.Black).testTag("video-output").semantics {
+            contentDescription = "视频画面"
+        },
+    ) {
+        key(trackId) {
+            PlayerSurface(
+                attached,
+                Modifier.matchParentSize()
+                    .resizeWithContentScale(ContentScale.Fit, Size(state.videoAspectRatio, 1f)),
+            )
+        }
+    }
+}
+
+@Composable
+internal fun FullScreenVideo(
+    model: AppViewModel,
+    trackId: String,
+    title: String,
+    state: PlaybackState,
+    active: Boolean,
+    caption: String,
+    subtitleSize: Int,
+    exit: () -> Unit,
+    timeline: @Composable () -> Unit,
+) {
+    val activity = LocalActivity.current
+    val originalOrientation = rememberSaveable {
+        activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    LaunchedEffect(activity, state.videoAspectRatio >= 1f) {
+        activity?.requestedOrientation =
+            if (state.videoAspectRatio >= 1f) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
+    DisposableEffect(activity) {
+        val bars = activity?.let {
+            WindowCompat.getInsetsController(it.window, it.window.decorView)
+        }
+        val oldBehavior = bars?.systemBarsBehavior
+        bars?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        bars?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            bars?.show(WindowInsetsCompat.Type.systemBars())
+            if (oldBehavior != null) bars.systemBarsBehavior = oldBehavior
+            if (activity?.isChangingConfigurations == false)
+                activity.requestedOrientation = originalOrientation
+        }
+    }
+    var controls by rememberSaveable(trackId) { mutableStateOf(true) }
+    var interaction by remember { mutableIntStateOf(0) }
+    var foreground by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(trackId) {
+        foreground = true
+        controls = true
+        interaction++
+        onPauseOrDispose { foreground = false }
+    }
+    val reduced = LocalReducedMotion.current
+    LaunchedEffect(controls, state.playing, interaction, foreground) {
+        if (controls && state.playing && foreground) {
+            delay(3500)
+            controls = false
+        }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        VideoOutput(model, trackId, active, state.playing, Modifier.matchParentSize())
+        Box(
+            Modifier.matchParentSize()
+                .semantics { contentDescription = "视频画面" }
+                .clickable(
+                    onClickLabel = if (controls) "隐藏播放控制" else "显示播放控制",
+                ) {
+                    controls = !controls
+                    interaction++
+                },
+        )
+        AnimatedVisibility(
+            controls || !state.playing,
+            Modifier.align(Alignment.TopCenter),
+            enter = fadeIn(tween(if (reduced) 0 else 120)),
+            exit = fadeOut(tween(if (reduced) 0 else 120)),
+        ) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(listOf(Ink.copy(alpha = .8f), Color.Transparent)),
+                    )
+                    .displayCutoutPadding()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconAction(Icons.Outlined.FullscreenExit, "退出全屏", action = exit)
+                Text(
+                    title,
+                    Modifier.weight(1f).padding(horizontal = 8.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                IconAction(Icons.Outlined.Headphones, "只听声音") {
+                    model.setAudioOnly(true)
+                    exit()
+                }
+            }
+        }
+        Column(
+            Modifier.align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Ink.copy(alpha = .7f))),
+                )
+                .displayCutoutPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (caption.isNotBlank())
+                Text(
+                    caption,
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    fontSize = subtitleSize.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            AnimatedVisibility(
+                controls || !state.playing,
+                enter = fadeIn(tween(if (reduced) 0 else 120)),
+                exit = fadeOut(tween(if (reduced) 0 else 120)),
+            ) {
+                Column {
+                    timeline()
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconAction(Icons.Outlined.Replay10, "后退十秒", enabled = active) {
+                            model.skip(-10000)
+                            interaction++
+                        }
+                        IconAction(
+                            if (state.playWhenReady) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            if (state.playWhenReady) "暂停" else "播放",
+                            Rose,
+                            enabled = active,
+                        ) {
+                            model.togglePlay()
+                            interaction++
+                        }
+                        IconAction(Icons.Outlined.Forward10, "前进十秒", enabled = active) {
+                            model.skip(10000)
+                            interaction++
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

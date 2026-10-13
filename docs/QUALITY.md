@@ -55,6 +55,7 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 | NFS 协议与随机读取 | libnfs，共用 Media3 远程文件适配层 |
 | 在线目录分页、缓存与重试 | AndroidX Paging 3 |
 | 播放、下载与音频缓存 | Media3 |
+| 视频画面、生命周期与等比例显示 | Media3 PlayerSurface 与 Compose ContentScale |
 | 索引、设置与任务 | Room / DataStore / WorkManager |
 
 应用负责作品目录识别、录音分组、字幕阅读锚点、精细定位手势和按作品合并的进度写入。LRC 解析服务于多时间标签与偏移量；MP3 扫描通过少量分段请求读取时长索引，音频解码由 Media3 负责。

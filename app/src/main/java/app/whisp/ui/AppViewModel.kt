@@ -52,6 +52,9 @@ data class PlaybackState(
     val ended: Boolean = false,
     val failed: Boolean = false,
     val queueIds: List<String> = emptyList(),
+    val hasVideo: Boolean = false,
+    val videoAspectRatio: Float = 16f / 9f,
+    val tracksKnown: Boolean = false,
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -256,6 +259,11 @@ class AppViewModel(
     val queueTracks = MutableStateFlow<List<TrackEntity>>(emptyList())
     val openingTrackId = MutableStateFlow<String?>(null)
     val loopDraftStart = MutableStateFlow(-1L)
+    val videoPlayer = MutableStateFlow<Player?>(null)
+    val audioOnly = savedState.getStateFlow("video-audio-only", false)
+    val embeddedSubtitle = MutableStateFlow("")
+    private var videoVisible = false
+    private var videoOwner: Any? = null
     private var loopDraftTrack: String? = null
     private var subtitleTrackId: String? = null
     private val subtitleCache = LruCache<String, List<Cue>>(16)
@@ -307,6 +315,8 @@ class AppViewModel(
                                     },
                                 )
                             }
+                        videoPlayer.value = controller
+                        publishVideoVisibility()
                         updatePlayer()
                     }
                         .onFailure { error.value = "播放服务连接失败" }
@@ -317,6 +327,35 @@ class AppViewModel(
     }
 
     internal fun refreshPlayer() = updatePlayer()
+
+    fun setAudioOnly(value: Boolean) {
+        savedState["video-audio-only"] = value
+        if (value) setVideoVisible(false)
+    }
+
+    internal fun videoVisibility(owner: Any, visible: Boolean) {
+        if (visible) {
+            videoOwner = owner
+            setVideoVisible(true)
+        } else if (videoOwner === owner) {
+            videoOwner = null
+            setVideoVisible(false)
+        }
+    }
+
+    private fun setVideoVisible(value: Boolean) {
+        if (!value) videoOwner = null
+        if (videoVisible == value) return
+        videoVisible = value
+        publishVideoVisibility()
+    }
+
+    private fun publishVideoVisibility() {
+        controller?.sendCustomCommand(
+            SessionCommand(PlaybackService.VIDEO, Bundle.EMPTY),
+            Bundle().apply { putBoolean("visible", videoVisible) },
+        )
+    }
 
     // Called only inside the resumed player page's lifecycle. Events still update
     // pause/seek/buffering immediately, without keeping an idle UI clock running.
@@ -341,6 +380,24 @@ class AppViewModel(
         if (openingTrackId.value != null) return
         val extras = c.sessionExtras
         val id = c.currentMediaItem?.mediaId
+        val size = c.videoSize
+        val hasVideo =
+            c.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO } ||
+                (id != null &&
+                    player.value.trackId == id &&
+                    player.value.hasVideo &&
+                    c.mediaMetadata.mediaType ==
+                        androidx.media3.common.MediaMetadata.MEDIA_TYPE_VIDEO)
+        val previousAspect =
+            player.value.videoAspectRatio.takeIf { player.value.trackId == id } ?: 16f / 9f
+        val aspect =
+            if (size.width > 0 && size.height > 0)
+                (size.width * size.pixelWidthHeightRatio / size.height).takeIf {
+                    it.isFinite() && it > 0
+                } ?: previousAspect
+            else previousAspect
+        embeddedSubtitle.value =
+            c.currentCues.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
         position.value = c.currentPosition.coerceAtLeast(0)
         player.value =
             PlaybackState(
@@ -358,6 +415,9 @@ class AppViewModel(
                 c.playbackState == Player.STATE_ENDED,
                 c.playerError != null,
                 updateQueue(c),
+                hasVideo,
+                aspect,
+                !c.currentTracks.isEmpty,
             )
         if (loopDraftTrack != id) loopDraftStart.value = -1
         if (id != null && id != subtitleTrackId) loadSubtitles(id)
@@ -810,6 +870,8 @@ class AppViewModel(
 
     override fun onCleared() {
         closed = true
+        setVideoVisible(false)
+        videoPlayer.value = null
         MediaController.releaseFuture(future)
     }
 }

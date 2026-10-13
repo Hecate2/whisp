@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -52,6 +54,9 @@ internal fun PlayerPage(
     val queueTracks by model.queueTracks.collectAsStateWithLifecycle()
     val opening by model.openingTrackId.collectAsStateWithLifecycle()
     val settings by model.settings.collectAsStateWithLifecycle()
+    val audioOnly by model.audioOnly.collectAsStateWithLifecycle()
+    val embeddedSubtitle by model.embeddedSubtitle.collectAsStateWithLifecycle()
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val haptics = rememberWhispHaptics()
     val bookmarks by model.bookmarks.collectAsStateWithLifecycle()
@@ -80,16 +85,30 @@ internal fun PlayerPage(
         }
         return
     }
+    val video =
+        if (state.trackId == track.id && state.tracksKnown) state.hasVideo else track.isVideo
+    val showVideo = video && !audioOnly && (shownTrack != null || opening != null)
+    LaunchedEffect(showVideo) { if (!showVideo) fullscreen = false }
+    BackHandler(fullscreen && showVideo) { fullscreen = false }
     @Composable
     fun Cover(modifier: Modifier) {
         Box(modifier.background(Surface)) {
-            Artwork(
-                model,
-                detail.work.coverId,
-                detail.work.title,
-                Modifier.matchParentSize(),
-                sharedKey = detail.work.id,
-            )
+            if (showVideo)
+                VideoOutput(
+                    model,
+                    track.id,
+                    shownTrack != null,
+                    state.playing,
+                    Modifier.matchParentSize(),
+                )
+            else
+                Artwork(
+                    model,
+                    detail.work.coverId,
+                    detail.work.title,
+                    Modifier.matchParentSize(),
+                    sharedKey = detail.work.id.takeUnless { video },
+                )
             Box(
                 Modifier.matchParentSize()
                     .background(
@@ -104,15 +123,25 @@ internal fun PlayerPage(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     IconAction(Icons.Outlined.KeyboardArrowDown, "收起播放器", action = back)
-                    IconAction(
-                        if (detail.work.favorite) Icons.Outlined.Favorite
-                        else Icons.Outlined.FavoriteBorder,
-                        "收藏作品",
-                        if (detail.work.favorite) Rose else Cream,
-                        enabled = true,
-                        feedback = true,
-                    ) {
-                        model.favorite(detail.work.id)
+                    Row {
+                        if (video)
+                            IconAction(
+                                if (audioOnly) Icons.Outlined.Videocam
+                                else Icons.Outlined.Headphones,
+                                if (audioOnly) "显示画面" else "只听声音",
+                            ) {
+                                model.setAudioOnly(!audioOnly)
+                            }
+                        IconAction(
+                            if (detail.work.favorite) Icons.Outlined.Favorite
+                            else Icons.Outlined.FavoriteBorder,
+                            "收藏作品",
+                            if (detail.work.favorite) Rose else Cream,
+                            enabled = true,
+                            feedback = true,
+                        ) {
+                            model.favorite(detail.work.id)
+                        }
                     }
                 }
             }
@@ -125,12 +154,38 @@ internal fun PlayerPage(
                 overflow = TextOverflow.Ellipsis,
                 modifier =
                     Modifier.align(Alignment.BottomStart)
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                        .padding(
+                            start = 24.dp,
+                            end = if (showVideo) 64.dp else 24.dp,
+                            top = 12.dp,
+                            bottom = 12.dp,
+                        ),
             )
+            if (showVideo)
+                Box(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                    IconAction(Icons.Outlined.Fullscreen, "全屏", enabled = shownTrack != null) {
+                        fullscreen = true
+                    }
+                }
         }
     }
     @Composable
     fun Subtitles(modifier: Modifier) {
+        if (
+            cues.isEmpty() &&
+                track.subtitleId == null &&
+                embeddedSubtitle.isNotBlank() &&
+                state.trackId == track.id
+        ) {
+            Box(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    embeddedSubtitle,
+                    fontSize = settings.subtitleSize.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            return
+        }
         key(track.id) {
             val cueState by
                 remember(cues, track.id, state.trackId, history, settings.subtitleOffsetMs) {
@@ -288,20 +343,55 @@ internal fun PlayerPage(
             }
         }
     }
-    BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
-        val width = maxWidth
-        val height = maxHeight
-        if (width > height)
-            Row(Modifier.fillMaxSize()) {
-                Cover(Modifier.fillMaxHeight().width(width * .38f))
-                Controls(Modifier.weight(1f).fillMaxHeight())
+    if (fullscreen && showVideo) {
+        val caption by
+            remember(cues, track.id, state.trackId, settings.subtitleOffsetMs, embeddedSubtitle) {
+                derivedStateOf {
+                    val current =
+                        SubtitleTimeline.current(
+                            cues,
+                            (displayPosition() - settings.subtitleOffsetMs).coerceAtLeast(0),
+                        )
+                    cues.getOrNull(current)?.text
+                        ?: if (track.subtitleId == null) embeddedSubtitle else ""
+                }
             }
-        else
-            Column(Modifier.fillMaxSize()) {
-                Cover(Modifier.fillMaxWidth().height(height * .29f))
-                Controls(Modifier.weight(1f).fillMaxWidth())
-            }
-    }
+        FullScreenVideo(
+            model,
+            track.id,
+            track.title,
+            state,
+            shownTrack != null,
+            caption,
+            settings.subtitleSize,
+            exit = { fullscreen = false },
+            timeline = { Timeline() },
+        )
+    } else
+        BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
+            val width = maxWidth
+            val height = maxHeight
+            if (width > height)
+                Row(Modifier.fillMaxSize()) {
+                    Cover(Modifier.fillMaxHeight().width(width * if (showVideo) .55f else .38f))
+                    Controls(Modifier.weight(1f).fillMaxHeight())
+                }
+            else
+                Column(Modifier.fillMaxSize()) {
+                    Cover(
+                        Modifier.fillMaxWidth()
+                            .height(
+                                if (showVideo)
+                                    minOf(
+                                        width / state.videoAspectRatio.coerceIn(.5f, 3f),
+                                        height * .43f,
+                                    )
+                                else height * .29f,
+                            ),
+                    )
+                    Controls(Modifier.weight(1f).fillMaxWidth())
+                }
+        }
     if (queue)
         WhispSheet(onDismissRequest = { queue = false }) { dismiss ->
             Text(

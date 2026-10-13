@@ -126,16 +126,18 @@ class AsmrOneClient(
                 val raw = node.text("mediaStreamUrl").ifBlank { node.text("mediaDownloadUrl") }
                 if (raw.isBlank()) continue
                 val url = resourceUrl(raw)
-                val audio = node.text("type") == "audio"
-                val audioExtensions = setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus")
+                val type = node.text("type")
+                val media = type in setOf("audio", "video")
+                val extensions = if (type == "video") MediaFormats.video else MediaFormats.audio
                 val filePath =
-                    if (audio && name.substringAfterLast('.', "").lowercase() !in audioExtensions) {
+                    if (media && name.substringAfterLast('.', "").lowercase() !in extensions) {
                         val extension =
                             url.pathSegments
                                 .lastOrNull()
                                 ?.substringAfterLast('.', "")
                                 ?.lowercase()
-                                ?.takeIf { it in audioExtensions } ?: "mp3"
+                                ?.takeIf { it in extensions }
+                                ?: if (type == "video") "mp4" else "mp3"
                         "$path.$extension"
                     } else path
                 require(paths.add(filePath)) { "作品目录存在重复文件名" }
@@ -146,7 +148,7 @@ class AsmrOneClient(
                         false,
                         node["size"]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0) ?: 0,
                     )
-                if (audio) {
+                if (media) {
                     val seconds = node["duration"]?.jsonPrimitive?.doubleOrNull ?: 0.0
                     if (seconds.isFinite() && seconds > 0)
                         durations[filePath.removePrefix("${work.rj}/")] = (seconds * 1000).toLong()

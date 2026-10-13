@@ -54,6 +54,13 @@ python3 tools/prepare-device-fixture.py --output fixtures/samba --smb
 
 ## 隔离设备测试
 
+`VideoPlaybackIntegrationTest` 使用 `assets/video-example.mp4` 的合成玫瑰色画面与静音音轨，校验实际渲染像素、SRT、进度定位、全屏与旋转、只听模式、后台播放、页面重建、混合队列，以及来源移除后的离线画面。样本通过 FFmpeg 生成，长度为 40 秒，编码为 H.264/AAC，测试文件包含合成标题标记。
+
+```sh
+ffmpeg -f lavfi -i 'color=c=0xEE9EBE:s=320x180:r=12' -f lavfi -i 'anullsrc=channel_layout=stereo:sample_rate=44100' -t 40 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p -c:a aac -b:a 32k -movflags +faststart -metadata title='Whisp synthetic video fixture' app/src/androidTest/assets/video-example.mp4
+ffmpeg -f lavfi -i 'color=c=0xEE9EBE:s=180x320:r=12' -f lavfi -i 'anullsrc=channel_layout=stereo:sample_rate=44100' -t 40 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p -c:a aac -b:a 32k -movflags +faststart -metadata title='Whisp synthetic portrait video fixture' app/src/androidTest/assets/video-portrait-example.mp4
+```
+
 性能、系统媒体、动效和存储测试使用独立的 `app.whisp.smoketest` 包，测试数据由该包管理。
 
 ```sh

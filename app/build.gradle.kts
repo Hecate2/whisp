@@ -30,8 +30,8 @@ android {
         applicationId = "app.whisp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.4.0-rc.7"
+        versionCode = 18
+        versionName = "0.4.0-rc.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         if (!splitApks) ndk { abiFilters += supportedAbis }
@@ -128,6 +128,7 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("androidx.media3:media3-extractor:$media3")
+    implementation("androidx.media3:media3-ui-compose:$media3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
     testImplementation("org.robolectric:robolectric:4.17")

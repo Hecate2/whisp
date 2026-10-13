@@ -10,6 +10,34 @@ class LibraryIndexerTest {
         FileEntry(path, "content://test/$path", false, size)
 
     @Test
+    fun videoOnlyWorksAndMixedQueuesKeepCaptionsAndResourceRoles() {
+        val indexed =
+            LibraryIndexer.index(
+                listOf(
+                    file("RJ00000001 示例/01_画面.MP4"),
+                    file("RJ00000001 示例/01_画面.MP4.SRT"),
+                    file("RJ00000001 示例/02_声音.wav"),
+                    file("RJ00000001 示例/03_附赠.mkv"),
+                    file("RJ00000001 示例/封面.jpg"),
+                    file("独立视频/01_示例.webm"),
+                ),
+                "source",
+                1,
+            )
+        assertEquals(2, indexed.works.size)
+        assertEquals(4, indexed.tracks.size)
+        val mixed = indexed.tracks.filter { it.workId == indexed.works.first { it.rj != null }.id }
+        assertEquals(listOf("画面", "声音", "附赠"), mixed.map { it.title })
+        assertEquals(listOf(true, false, true), mixed.map { it.isVideo })
+        assertEquals(
+            indexed.attachments.first { it.kind == "subtitle" }.id,
+            mixed.first().subtitleId,
+        )
+        assertTrue(mixed.last().bonus)
+        assertEquals(setOf("subtitle", "image"), indexed.attachments.map { it.kind }.toSet())
+    }
+
+    @Test
     fun indexesSyntheticDirectoryFixture() {
         val json = javaClass.getResource("/library-layout.json")!!.readText()
         val entries =

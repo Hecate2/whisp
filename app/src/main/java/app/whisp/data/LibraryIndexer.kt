@@ -22,23 +22,21 @@ fun stableId(value: String): String = value.encodeUtf8().sha256().substring(0, 1
 
 object LibraryIndexer {
     private val rjPattern = Regex("RJ\\d{6,}", RegexOption.IGNORE_CASE)
-    private val audioExtensions = setOf("mp3", "m4a", "flac", "wav", "ogg", "opus", "aac")
     private val images = setOf("jpg", "jpeg", "png", "webp")
 
     private fun String.extension() = substringAfterLast('.', "").lowercase()
 
     private fun String.basename() = substringAfterLast('/')
 
-    private fun stem(name: String) =
-        name
-            .replace(Regex("\\.(vtt|lrc)$", RegexOption.IGNORE_CASE), "")
-            .replace(
-                Regex(
-                    "\\.(mp3|m4a|flac|wav|ogg|opus|aac|txt|jpg|jpeg|png|webp|pdf)$",
-                    RegexOption.IGNORE_CASE,
-                ),
-                "",
-            )
+    private val subtitleSuffix =
+        Regex("\\.(${MediaFormats.subtitles.joinToString("|")})$", RegexOption.IGNORE_CASE)
+    private val resourceSuffix =
+        Regex(
+            "\\.(${(MediaFormats.playable + setOf("txt", "jpg", "jpeg", "png", "webp", "pdf")).joinToString("|")})$",
+            RegexOption.IGNORE_CASE,
+        )
+
+    private fun stem(name: String) = name.replace(subtitleSuffix, "").replace(resourceSuffix, "")
 
     fun number(name: String): Int =
         Regex("^(\\d+)")
@@ -85,7 +83,7 @@ object LibraryIndexer {
         val groups =
             fileGroups
                 .mapValues { (_, entries) ->
-                    entries.filter { it.path.extension() in audioExtensions }
+                    entries.filter { it.path.extension() in MediaFormats.playable }
                 }
                 .filterValues { it.isNotEmpty() }
         val works = mutableListOf<WorkEntity>()
@@ -95,22 +93,21 @@ object LibraryIndexer {
         groups.toSortedMap().forEach { (root, group) ->
             val name = root.basename().ifBlank { "未命名作品" }
             val rj = rjPattern.find(name)?.value?.uppercase()
-            val audioSignature =
+            val mediaSignature =
                 group.map { "${it.path.removePrefix("$root/")}:${it.size}" }.sorted()
             val workId =
-                workOverride?.id ?: stableId("${rj ?: name}|${audioSignature.joinToString("|")}")
+                workOverride?.id ?: stableId("${rj ?: name}|${mediaSignature.joinToString("|")}")
             val inWork = fileGroups.getValue(root)
             val resourceFiles = inWork.filter {
-                it.path.extension() !in audioExtensions &&
-                    it.path.extension() in images + setOf("vtt", "lrc", "txt", "pdf")
+                it.path.extension() !in MediaFormats.playable &&
+                    it.path.extension() in images + MediaFormats.subtitles + setOf("txt", "pdf")
             }
             val resources = resourceFiles.associateWith { file ->
                 val relative = file.path.removePrefix("$root/")
                 val fileName = file.path.basename()
                 val kind =
                     when (file.path.extension()) {
-                        "vtt",
-                        "lrc" -> "subtitle"
+                        in MediaFormats.subtitles -> "subtitle"
                         "txt" ->
                             if (
                                 Regex("附赠|特典|おまけ|omake|bonus", RegexOption.IGNORE_CASE)

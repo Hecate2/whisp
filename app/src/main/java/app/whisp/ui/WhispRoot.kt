@@ -1017,6 +1017,13 @@ internal fun TrackRow(track: TrackEntity, active: Boolean, click: () -> Unit) {
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
+        if (track.isVideo)
+            Icon(
+                Icons.Outlined.Videocam,
+                "视频",
+                tint = Muted,
+                modifier = Modifier.padding(end = 8.dp).size(18.dp),
+            )
         if (track.durationMs > 0) Text(clock(track.durationMs), color = Muted, fontSize = 12.sp)
     }
 }

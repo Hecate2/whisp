@@ -12,6 +12,20 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35], application = Application::class)
 class SubtitleTimelineTest {
     @Test
+    fun subripKeepsMillisecondsMultilineAndSeekBoundaries() {
+        val cues =
+            SubtitleTimeline.parse(
+                "\uFEFF1\r\n00:00:01,250 --> 00:00:03,500\r\n<b>示例</b>\r\n第二行\r\n\r\n2\r\n00:00:05,000 --> 00:00:06,000\r\n下一句\r\n",
+                "SRT",
+            )
+        assertEquals(2, cues.size)
+        assertEquals(Cue(1250, 3500, "示例\n第二行"), cues.first())
+        assertEquals(0, SubtitleTimeline.current(cues, 1250))
+        assertEquals(-1, SubtitleTimeline.current(cues, 3500))
+        assertEquals(1, SubtitleTimeline.current(cues, 5500))
+    }
+
+    @Test
     fun quietIntervalsKeepContextAndBackwardSeekChangesIt() {
         val cues = listOf(Cue(1000, 3000, "One"), Cue(5000, 7000, "Two"))
         assertEquals(0, SubtitleTimeline.anchor(cues, 0))
