@@ -12,3 +12,8 @@
 -keep class net.engio.mbassy.dispatch.ReflectiveHandlerInvocation {
     public <init>(net.engio.mbassy.subscription.SubscriptionContext);
 }
+# libnfs JNI entry points and the UTF-8 directory record constructor.
+-keep class app.whisp.data.NfsNative { *; }
+-keep class app.whisp.data.NfsNativeEntry {
+    public <init>(byte[], int, long, long);
+}

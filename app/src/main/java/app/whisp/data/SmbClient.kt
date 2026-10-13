@@ -26,12 +26,6 @@ import kotlinx.coroutines.ensureActive
  * Each operation owns its session; playback, scans and downloads cannot close each other's handles.
  */
 class SmbClient(private val report: (String) -> Unit = {}) {
-    interface ReadHandle : Closeable {
-        val length: Long
-
-        fun read(buffer: ByteArray, offset: Long, bufferOffset: Int, count: Int): Int
-    }
-
     private val config =
         SmbConfig.builder()
             .withAuthenticators(NtlmAuthenticator.Factory())
@@ -162,16 +156,16 @@ class SmbClient(private val report: (String) -> Unit = {}) {
         AssetSession(source, password)
 
     inner class AssetSession
-    internal constructor(private val source: SourceEntity, password: String) : Closeable {
+    internal constructor(private val source: SourceEntity, password: String) : RemoteAssetSession {
         private val disk = Disk(source, password)
 
-        fun bytes(uri: String, limit: Int): ByteArray =
+        override fun bytes(uri: String, limit: Int): ByteArray =
             openFile(disk, SmbAddress.assetPath(uri, source.id)).use { file ->
                 require(file.length <= limit) { "文件过大" }
                 read(file, 0, file.length.toInt(), requireFull = true)
             }
 
-        fun duration(uri: String): Long =
+        override fun duration(uri: String): Long =
             openFile(disk, SmbAddress.assetPath(uri, source.id)).use { file ->
                 Mp3Metadata.duration(file.length) { offset, count -> read(file, offset, count) }
             }
@@ -203,7 +197,7 @@ class SmbClient(private val report: (String) -> Unit = {}) {
         private val source: SourceEntity,
         private val password: String,
         uri: String,
-    ) : ReadHandle {
+    ) : RemoteReadHandle {
         private val relative = SmbAddress.assetPath(uri, source.id)
         private var disk: Disk? = null
         private var file: com.hierynomus.smbj.share.File? = null

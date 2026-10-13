@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -18,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -212,7 +214,7 @@ internal fun SourcesPage(
             containerColor = Surface,
             title = { Text("添加来源") },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     TextButton(
                         onClick = {
                             adding = false
@@ -269,6 +271,17 @@ internal fun SourcesPage(
                         Icon(Icons.Outlined.CloudQueue, null)
                         Spacer(Modifier.width(12.dp))
                         Text("WebDAV")
+                    }
+                    TextButton(
+                        onClick = {
+                            adding = false
+                            remote = "NFS"
+                        },
+                        Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.Storage, null)
+                        Spacer(Modifier.width(12.dp))
+                        Text("NFS")
                     }
                 }
             },
@@ -350,10 +363,13 @@ internal fun SourcesPage(
 
 @Composable
 private fun RemoteDialog(model: AppViewModel, kind: String, dismiss: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var address by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
+    var name by rememberSaveable(kind) { mutableStateOf("") }
+    var address by rememberSaveable(kind) { mutableStateOf("") }
+    var username by rememberSaveable(kind) { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var version by rememberSaveable(kind) { mutableIntStateOf(4) }
+    var uid by rememberSaveable(kind) { mutableStateOf("65534") }
+    var gid by rememberSaveable(kind) { mutableStateOf("65534") }
     var connecting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -373,25 +389,63 @@ private fun RemoteDialog(model: AppViewModel, kind: String, dismiss: () -> Unit)
                     label = { Text("地址") },
                     placeholder = {
                         Text(
-                            if (kind == "SMB") "smb://nas.example/media/Audio/"
-                            else "https://nas.example/Audio/",
+                            when (kind) {
+                                "SMB" -> "smb://nas.example/media/Audio/"
+                                "NFS" -> "nfs://nas.example/media/Audio"
+                                else -> "https://nas.example/Audio/"
+                            },
                         )
                     },
                     singleLine = true,
                 )
-                OutlinedTextField(
-                    username,
-                    { username = it },
-                    label = { Text("账号") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    password,
-                    { password = it },
-                    label = { Text("密码") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                )
+                if (kind == "NFS") {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        listOf(3 to "3", 4 to "4.0", 42 to "4.2").forEachIndexed {
+                            index,
+                            (value, text) ->
+                            SegmentedButton(
+                                selected = version == value,
+                                onClick = { version = value },
+                                enabled = !connecting,
+                                shape = SegmentedButtonDefaults.itemShape(index, 3),
+                            ) {
+                                Text("NFS $text")
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            uid,
+                            { uid = it },
+                            Modifier.weight(1f),
+                            label = { Text("UID") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                        OutlinedTextField(
+                            gid,
+                            { gid = it },
+                            Modifier.weight(1f),
+                            label = { Text("GID") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                    }
+                } else {
+                    OutlinedTextField(
+                        username,
+                        { username = it },
+                        label = { Text("账号") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        password,
+                        { password = it },
+                        label = { Text("密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                    )
+                }
                 error?.let { Text(it, color = Rose) }
             }
         },
@@ -403,9 +457,19 @@ private fun RemoteDialog(model: AppViewModel, kind: String, dismiss: () -> Unit)
                     error = null
                     scope.launch {
                         try {
-                            if (kind == "SMB")
-                                model.repository.addSmb(name, address, username, password)
-                            else model.repository.addWebDav(name, address, username, password)
+                            when (kind) {
+                                "SMB" -> model.repository.addSmb(name, address, username, password)
+                                "NFS" ->
+                                    model.repository.addNfs(
+                                        name,
+                                        address,
+                                        version,
+                                        uid.trim().toIntOrNull() ?: error("UID 应为非负整数"),
+                                        gid.trim().toIntOrNull() ?: error("GID 应为非负整数"),
+                                    )
+                                else ->
+                                    model.repository.addWebDav(name, address, username, password)
+                            }
                             dismiss()
                         } catch (e: CancellationException) {
                             throw e

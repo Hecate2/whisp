@@ -4,7 +4,7 @@ Whisp 是面向本地文件、NAS 和在线作品的 Android 音频播放器，�
 
 ## 功能
 
-- 本地目录授权导入、SMB 2/3 和 HTTPS WebDAV 来源。
+- 本地目录授权导入、SMB 2/3、NFS 3 / 4.0 / 4.2 和 HTTPS WebDAV 来源。
 - ASMR.ONE 在线来源、分页浏览、搜索、最新 / 热门排序和字幕筛选，打开作品后加入作品库。
 - DLsite 官方账号登录、已购音声检索、原生播放和离线下载。
 - 作品库、系列、收藏、搜索，以及音轨、台本和附赠资料。
@@ -37,6 +37,8 @@ Whisp 是面向本地文件、NAS 和在线作品的 Android 音频播放器，�
 
 在「来源」添加本地目录、SMB 共享或 WebDAV 服务。SMB 地址示例为 `smb://nas.example/media/Audio/`，支持自定义端口；账号支持 `用户名` 和 `域\用户名`。WebDAV 使用 HTTPS。服务器、共享、目录与账号均通过来源页面配置。
 
+NFS 地址示例为 `nfs://nas.example/media/Audio`，可选择 NFS 3、4.0 或 4.2，并配置 UID/GID；默认 Unix 身份为 `65534:65534`。连接使用 TCP 与 AUTH_SYS，NAS 的导出权限需覆盖手机地址并允许非特权客户端端口。建议选择音频所在的导出目录或允许挂载的子目录。扫描、字幕、随机跳转和离线下载共用现有作品库与播放器。
+
 在「来源 → 添加来源 → DLsite」打开官方登录页，使用 viviON ID 登录后同步已购音声作品。来源覆盖 RJ 同人音声和 VJ 商业音声，支持作品名、声优、社团和作品编号搜索，以及购买时间或作品名排序。打开作品时读取官方曲目目录，音频和关联字幕使用统一的播放器与离线下载。社交登录用户可在现有 viviON ID 的账号管理中设置登录 ID 和专用密码。
 
 DLsite 账号会话由 Android Keystore 加密保存；购买库按账号分开缓存，曲目按需读取，播放授权在资源打开时获取和更新。在线播放采用 DLsite Play 提供的优化音频，音质以实际资源为准。来源管理支持重新登录、同步和退出账号；已下载的离线副本由存储管理维护。
@@ -55,16 +57,18 @@ ASMR.ONE 提供常驻搜索框，支持作品名、声优、RJ 编号与作品�
 
 项目使用 Kotlin、Jetpack Compose、Navigation 3、Media3、Room、DataStore、WorkManager、Coil、OkHttp 和 SMBJ。依赖版本固定在 Gradle 配置中；Material 3 使用 `1.5.0-beta01` 的公开 MotionScheme API。
 
-构建环境为 JDK 21、Android SDK Platform 37、Build Tools 36.0.0。Gradle Wrapper 固定为 9.8.1。SDK 路径通过 Android Studio、`ANDROID_HOME` 或本机的 `local.properties` 配置。
+构建环境为 JDK 21、Android SDK Platform 37、Build Tools 36.0.0、NDK 30.0.16248370 和 CMake 3.31.6。Gradle Wrapper 固定为 9.8.1。SDK 路径通过 Android Studio、`ANDROID_HOME` 或本机的 `local.properties` 配置。
 
 Debian 上可通过 apt 安装基础工具：
 
 ```sh
-sudo apt-get install openjdk-21-jdk-headless adb
+sudo apt-get install openjdk-21-jdk-headless adb cmake ninja-build clang-format-19
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
 Android SDK 需自行安装相应平台。Debug APK 位于 `app/build/outputs/apk/debug/`。
+
+NDK 通过 Android SDK Manager 安装。CMake 可使用 SDK 内的 `cmake;3.31.6`，或在本机 `local.properties` 中用 `cmake.dir` 指向相同版本的系统安装。NFS 使用 libnfs 8.0.0，共享库与 JNI 桥接层分开构建；CMake 按固定提交和 SHA256 下载源码，构建时需要访问对应源代码地址。第三方来源与许可证见 [原生依赖](docs/NATIVE.md)。
 
 ```sh
 ./gradlew -PsplitApks :app:assembleRelease :app:lintRelease
@@ -91,7 +95,7 @@ python3 tools/check-public-content.py
 ## 播放与系统行为
 
 - 来源凭据通过 Android Keystore 加密保存在设备上，音轨 URL 使用文件位置标识。应用数据保存在当前设备。
-- 网络来源支持 SMB2/3 直连共享和 HTTPS WebDAV，SMB 访问使用只读操作。SMB3 加密通过服务端协商。
+- 网络来源支持 SMB2/3、NFS 和 HTTPS WebDAV，SMB 与 NFS 使用只读操作。SMB3 加密通过服务端协商。
 - 音频按原左右声道播放。A–B 循环通过播放器跳转实现，衔接精度受解码器和缓冲状态影响。
 - 台本与字幕按 UTF-8 读取，资料预览提供文本阅读和图片查看。
 - 睡眠定时使用单调时钟，暂停期间持续计时，生命周期与播放服务一致。设备重启后的播放由用户发起。

@@ -2,10 +2,10 @@
 
 ## 检查入口
 
-Kotlin 和 Gradle 脚本使用 Spotless 8.10.4 与 ktfmt 0.65 的 Kotlin 官方风格，Python 工具使用 Black 26.10.1。编辑器约定见 `.editorconfig`。
+Kotlin 和 Gradle 脚本使用 Spotless 8.10.4 与 ktfmt 0.65 的 Kotlin 官方风格，Python 工具使用 Black 26.10.1，JNI 桥接代码使用 clang-format 19。编辑器约定见 `.editorconfig` 与 `.clang-format`。
 
 ```sh
-sudo apt-get install python3-venv
+sudo apt-get install python3-venv clang-format-19
 python3 -m venv .venv
 .venv/bin/python -m pip install black==26.10.1
 . .venv/bin/activate
@@ -30,6 +30,7 @@ export WHISP_BLACK="$PWD/.venv/bin/black"
 | Lifecycle / Navigation 3 | 2.11.0 / 1.2.0 |
 | Paging 3 | 3.5.2 |
 | Media3 / SMBJ | 1.11.1 / 0.15.0 |
+| libnfs / Android NDK / CMake | 8.0.0 / 30.0.16248370 / 3.31.6 |
 | Room / DataStore / WorkManager | 2.8.5 / 1.2.1 / 2.12.0 |
 | Coil / OkHttp / Okio | 3.6.3 / 5.5.0 / 3.18.2 |
 | Coroutines / kotlinx.serialization / Robolectric | 1.11.0 / 1.11.0 / 4.17 |
@@ -51,6 +52,7 @@ Room 与 WorkManager 的扩展 API 随主模块提供。测试服务器使用 Mo
 | ViewModel 创建 | AndroidX `viewModelFactory` |
 | 文件原子替换 | Java NIO `Files.move` |
 | HTTP / SMB 传输 | OkHttp / SMBJ |
+| NFS 协议与随机读取 | libnfs，共用 Media3 远程文件适配层 |
 | 在线目录分页、缓存与重试 | AndroidX Paging 3 |
 | 播放、下载与音频缓存 | Media3 |
 | 索引、设置与任务 | Room / DataStore / WorkManager |

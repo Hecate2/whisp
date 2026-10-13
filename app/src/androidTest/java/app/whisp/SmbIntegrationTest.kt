@@ -12,7 +12,7 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import app.whisp.data.SmbDataSource
+import app.whisp.data.RemoteFileDataSource
 import app.whisp.playback.PlaybackService
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -73,7 +73,7 @@ class SmbIntegrationTest {
         // Exercise real Media3 offset/length boundaries through the SMB adapter.
         val source = runBlocking { repo.dao.source(id)!! }
         val uri = runBlocking { repo.resolve(track.id) }
-        val data = SmbDataSource { repo.smb.open(source, password, it) }
+        val data = RemoteFileDataSource("SMB") { repo.smb.open(source, password, it) }
         val offset = 40_000_003L
         assertEquals(
             1021L,

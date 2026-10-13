@@ -44,6 +44,14 @@ python3 tools/prepare-device-fixture.py --output fixtures/samba --smb
 
 通过环境变量 `WHISP_SMB_TEST_CONFIG` 指向该文件，然后运行 `SmbServerTest`。测试覆盖鉴权、目录扫描、随机读取、EOF、超过 4 GiB 的偏移、MP3 时长索引、复用会话和错误密码处理。配置与服务器日志作为本机测试资料保存。
 
+## NFS 验证
+
+`NfsAddressTest` 与 `NfsClientTest` 使用示例地址和内存目录，验证协议、Unix 身份、Unicode 文件名、来源隔离、扫描并发及连接释放。SMB 与 NFS 共用 `RemoteFileDataSource` 的 EOF、读取范围和 64 位偏移处理。
+
+`NfsIntegrationTest` 与 `NfsSourceUiIntegrationTest` 使用隔离包，通过 instrumentation 参数 `nfsRoot` 指定专用合成共享。样本包含带保留字符与 emoji 的 WAV、VTT、封面、目录及符号链接，以及超过 4 GiB 的稀疏文件。测试覆盖三种协议的随机读取、扫描、字幕、播放、跳转、离线下载和来源移除，以及配置页面的重建。
+
+测试来源应为单独创建的样本目录，服务器地址通过参数传入。稀疏文件的逻辑长度超过 4 GiB，实际磁盘占用由样本写入范围决定；测试完成后清理该专用目录。
+
 ## 隔离设备测试
 
 性能、系统媒体、动效和存储测试使用独立的 `app.whisp.smoketest` 包，测试数据由该包管理。

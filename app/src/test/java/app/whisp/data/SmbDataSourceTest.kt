@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class SmbDataSourceTest {
-    private class Handle(override val length: Long) : SmbClient.ReadHandle {
+    private class Handle(override val length: Long) : RemoteReadHandle {
         val offsets = mutableListOf<Long>()
         var closes = 0
 
@@ -35,7 +35,7 @@ class SmbDataSourceTest {
     @Test
     fun boundedReadRetainsOffsetsAboveFourGiBAndClosesItsHandle() {
         val handle = Handle(5L * 1024 * 1024 * 1024)
-        val data = SmbDataSource { handle }
+        val data = RemoteFileDataSource { handle }
         val position = 4_294_967_303L
         val spec =
             DataSpec.Builder()
@@ -61,7 +61,7 @@ class SmbDataSourceTest {
     @Test
     fun invalidPositionHasTheMedia3ReasonAndReleasesTheOpenedHandle() {
         val handles = mutableListOf<Handle>()
-        val data = SmbDataSource { Handle(10).also(handles::add) }
+        val data = RemoteFileDataSource { Handle(10).also(handles::add) }
         try {
             data.open(
                 DataSpec.Builder().setUri("whisp-smb://source/example.mp3").setPosition(11).build(),

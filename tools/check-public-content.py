@@ -80,7 +80,7 @@ def inspect(name, data, origin):
         for label, rule in RULES.items():
             # A share named /media/ in an example URL is not a host mount path.
             candidate = (
-                re.sub(r"\b(?:https?|smb|content)://[^\s\"'<>]+", "", line)
+                re.sub(r"\b(?:https?|smb|nfs|content)://[^\s\"'<>]+", "", line)
                 if label == "personal filesystem path"
                 else line
             )

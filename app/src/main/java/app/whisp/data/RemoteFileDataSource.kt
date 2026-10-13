@@ -11,9 +11,11 @@ import androidx.media3.datasource.DataSpec
 import java.io.IOException
 
 @androidx.annotation.OptIn(UnstableApi::class)
-class SmbDataSource(private val readerFor: (String) -> SmbClient.ReadHandle) :
-    BaseDataSource(true) {
-    private var reader: SmbClient.ReadHandle? = null
+class RemoteFileDataSource(
+    private val protocol: String = "网络",
+    private val readerFor: (String) -> RemoteReadHandle,
+) : BaseDataSource(true) {
+    private var reader: RemoteReadHandle? = null
     private var spec: DataSpec? = null
     private var position = 0L
     private var remaining = 0L
@@ -47,7 +49,7 @@ class SmbDataSource(private val readerFor: (String) -> SmbClient.ReadHandle) :
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
         val count =
             reader!!.read(buffer, position, offset, minOf(length.toLong(), remaining).toInt())
-        if (count <= 0) throw IOException("SMB 文件读取中断")
+        if (count <= 0) throw IOException("$protocol 文件读取中断")
         position += count
         remaining -= count
         bytesTransferred(count)

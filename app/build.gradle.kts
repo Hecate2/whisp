@@ -19,13 +19,21 @@ val releaseSecrets =
 android {
     namespace = "app.whisp"
     compileSdk = 37
+    ndkVersion = "30.0.16248370"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.31.6"
+        }
+    }
     defaultConfig {
         applicationId = "app.whisp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.4.0-rc.6"
+        versionCode = 17
+        versionName = "0.4.0-rc.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         if (!splitApks) ndk { abiFilters += supportedAbis }
     }
     splits {

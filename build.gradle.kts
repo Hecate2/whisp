@@ -45,10 +45,26 @@ tasks.register<Exec>("publicContentCheck") {
     commandLine("python3", "tools/check-public-content.py")
 }
 
+val clangFormatExecutable =
+    providers.environmentVariable("WHISP_CLANG_FORMAT").orElse("clang-format-19")
+
+tasks.register<Exec>("cppFormat") {
+    commandLine(clangFormatExecutable.get(), "-i", "app/src/main/cpp/nfs_bridge.cpp")
+}
+
+tasks.register<Exec>("cppFormatCheck") {
+    commandLine(
+        clangFormatExecutable.get(),
+        "--dry-run",
+        "--Werror",
+        "app/src/main/cpp/nfs_bridge.cpp",
+    )
+}
+
 tasks.register("fmt") {
     group = "formatting"
     description = "Format Kotlin, Gradle scripts, Python tools and text files."
-    dependsOn("spotlessApply", "pythonFormat")
+    dependsOn("spotlessApply", "pythonFormat", "cppFormat")
 }
 
 tasks.register("qualityCheck") {
@@ -58,6 +74,7 @@ tasks.register("qualityCheck") {
         "spotlessCheck",
         "pythonFormatCheck",
         "publicContentCheck",
+        "cppFormatCheck",
         ":app:testDebugUnitTest",
         ":app:lintDebug",
         ":app:lintRelease",

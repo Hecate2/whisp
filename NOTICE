@@ -18,3 +18,8 @@ by the LGPL is provided in COPYING.
 
 Third-party dependencies and the Gradle Wrapper retain their own licenses.
 The Gradle Wrapper scripts include their original Apache-2.0 notices.
+
+Whisp uses libnfs 8.0.0 by Ronnie Sahlberg and contributors, built as a
+separate shared library. Its library sources are LGPL-2.1-or-later;
+protocol definitions and generated files retain their upstream BSD notices.
+Pinned source and build information are provided in docs/NATIVE.md.

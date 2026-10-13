@@ -406,6 +406,7 @@ class LibraryRepository(val context: Context) {
     }
 
     val smb = SmbClient { Log.i("WhispScan", it) }
+    val nfs = NfsClient(report = { Log.i("WhispScan", it) })
     private val completedDownloads = MutableStateFlow<Set<String>>(emptySet())
     val library =
         combine(dao.observeLibrary(), dao.observeLocatedWorks(), completedDownloads) {
@@ -522,13 +523,24 @@ class LibraryRepository(val context: Context) {
                     spec.withUri(location.uri.toUri())
                 }
                 .createDataSource()
-        val smbData = SmbDataSource { uri ->
-            val sourceId = uri.toUri().authority ?: throw IOException("来源未关联")
-            val source =
-                runBlocking(Dispatchers.IO) { dao.source(sourceId) } ?: throw IOException("来源已移除")
-            require(source.kind == "smb") { "来源类型不匹配" }
-            smb.open(source, secrets.decrypt(source.secret), uri)
-        }
+        val smbData =
+            RemoteFileDataSource("SMB") { uri ->
+                val sourceId = uri.toUri().authority ?: throw IOException("来源未关联")
+                val source =
+                    runBlocking(Dispatchers.IO) { dao.source(sourceId) }
+                        ?: throw IOException("来源已移除")
+                require(source.kind == "smb") { "来源类型不匹配" }
+                smb.open(source, secrets.decrypt(source.secret), uri)
+            }
+        val nfsData =
+            RemoteFileDataSource("NFS") { uri ->
+                val sourceId = uri.toUri().authority ?: throw IOException("来源未关联")
+                val source =
+                    runBlocking(Dispatchers.IO) { dao.source(sourceId) }
+                        ?: throw IOException("来源已移除")
+                require(source.kind == "nfs") { "来源类型不匹配" }
+                nfs.open(source, uri)
+            }
         val dlsiteData =
             DlsiteDataSource(::dlsiteResource) { sourceId, client ->
                 scope.launch {
@@ -551,6 +563,7 @@ class LibraryRepository(val context: Context) {
             override fun addTransferListener(listener: TransferListener) {
                 fallback.addTransferListener(listener)
                 smbData.addTransferListener(listener)
+                nfsData.addTransferListener(listener)
                 online.addTransferListener(listener)
                 dlsiteData.addTransferListener(listener)
             }
@@ -559,6 +572,7 @@ class LibraryRepository(val context: Context) {
                 active =
                     when (spec.uri.scheme) {
                         "whisp-smb" -> smbData
+                        "whisp-nfs" -> nfsData
                         "whisp-asmr" -> online
                         "whisp-dlsite" -> dlsiteData
                         else -> fallback
@@ -834,6 +848,22 @@ class LibraryRepository(val context: Context) {
         val id = stableId("asmr.one")
         if (dao.source(id) == null)
             dao.putSource(SourceEntity(id, "ASMR.ONE", "asmrone", AsmrOneClient.API_ROOT))
+        return id
+    }
+
+    suspend fun addNfs(
+        name: String,
+        root: String,
+        version: Int = 4,
+        uid: Int = 65534,
+        gid: Int = 65534,
+    ): String {
+        val address = NfsAddress.parse(root, version, uid, gid)
+        val id = stableId("nfs|${address.normalized}")
+        val source = SourceEntity(id, name.ifBlank { address.host }, "nfs", address.normalized)
+        withContext(Dispatchers.IO) { nfs.check(source) }
+        dao.putSource(source)
+        scheduleScan(id)
         return id
     }
 
@@ -1252,6 +1282,7 @@ class LibraryRepository(val context: Context) {
                 when (source.kind) {
                     "local" -> LocalDirectory(context).walk(source.root)
                     "smb" -> smb.walk(source, secrets.decrypt(source.secret))
+                    "nfs" -> nfs.walk(source)
                     "webdav" -> dav.walk(source, secrets.decrypt(source.secret))
                     else -> error("不支持的来源类型")
                 }
@@ -1430,7 +1461,7 @@ class LibraryRepository(val context: Context) {
         (0 until lanes)
             .map { lane ->
                 async(Dispatchers.IO) {
-                    var session: SmbClient.AssetSession? = null
+                    var session: RemoteAssetSession? = null
                     val durations = mutableListOf<Pair<String, Long>>()
                     suspend fun flush() {
                         if (durations.isEmpty()) return
@@ -1441,6 +1472,7 @@ class LibraryRepository(val context: Context) {
                     }
                     try {
                         if (source.kind == "smb") session = smb.assets(source, password)
+                        if (source.kind == "nfs") session = nfs.assets(source)
                         tasks
                             .filterIndexed { index, _ -> index % lanes == lane }
                             .forEachIndexed { index, asset ->
@@ -1462,7 +1494,8 @@ class LibraryRepository(val context: Context) {
                                         val location = locations.getValue(asset.id)
                                         val duration =
                                             when (source.kind) {
-                                                "smb" -> session!!.duration(location.uri)
+                                                "smb",
+                                                "nfs" -> session!!.duration(location.uri)
                                                 "local" -> localDuration(asset.id)
                                                 else ->
                                                     Mp3Metadata.duration(location.size) {
@@ -1747,9 +1780,13 @@ class LibraryRepository(val context: Context) {
                     val location =
                         dao.locations(id).firstOrNull { it.uri == uri.toString() } ?: error("来源未关联")
                     val source = dao.source(location.sourceId) ?: error("来源已移除")
-                    if (source.kind == "smb")
-                        smb.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
-                    else dav.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                    when (source.kind) {
+                        "smb" ->
+                            smb.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                        "nfs" -> nfs.bytes(source, uri.toString(), limit)
+                        else ->
+                            dav.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                    }
                 }
             }
         }
