@@ -687,7 +687,7 @@ class AppViewModel(
     fun download(id: String) = action { repository.downloadWork(id) }
 
     fun removeSource(sourceId: String) = action {
-        if (repository.dao.source(sourceId)?.kind == "dlsite") {
+        if (repository.dao.source(sourceId)?.kindType == SourceKind.DLSITE) {
             val workIds = repository.dao.sourceWorkIds(sourceId).toSet()
             if (openingWorkId in workIds) {
                 ++openingGeneration

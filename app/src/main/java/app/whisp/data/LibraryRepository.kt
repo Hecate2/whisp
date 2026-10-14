@@ -78,7 +78,7 @@ class LibraryRepository(val context: Context) {
                 return@withLock it
             }
             val source = dao.source(sourceId) ?: throw IOException("来源已移除")
-            require(source.kind == "dlsite") { "来源类型不匹配" }
+            require(source.kindType == SourceKind.DLSITE) { "来源类型不匹配" }
             if (source.secret.isBlank()) throw DlsiteLoginRequired()
             lateinit var session: DlsiteSession
             session =
@@ -87,7 +87,7 @@ class LibraryRepository(val context: Context) {
                         dlsiteCookieWrites.withLock {
                             dao.source(sourceId)
                                 ?.takeIf {
-                                    it.kind == "dlsite" &&
+                                    it.kindType == SourceKind.DLSITE &&
                                         dlsiteClients[sourceId]?.session === session
                                 }
                                 ?.let {
@@ -112,13 +112,13 @@ class LibraryRepository(val context: Context) {
                 it.session.clear()
                 it.http.dispatcher.cancelAll()
             }
-            val number = dao.sources().count { it.kind == "dlsite" }
+            val number = dao.sources().count { it.kindType == SourceKind.DLSITE }
             dao.putSource(
                 (previous
                         ?: SourceEntity(
                             id,
                             if (number == 0) "DLsite" else "DLsite ${number + 1}",
-                            "dlsite",
+                            SourceKind.DLSITE.raw,
                             "https://play.dlsite.com/",
                         ))
                     .copy(
@@ -282,7 +282,7 @@ class LibraryRepository(val context: Context) {
                     }
                 var obsoleteTracks = emptyList<String>()
                 database.withTransaction {
-                    require(dao.source(sourceId)?.kind == "dlsite") { "来源已移除" }
+                    require(dao.source(sourceId)?.kindType == SourceKind.DLSITE) { "来源已移除" }
                     val old = dao.details(workId)
                     val base = indexed.works.single()
                     val fresh =
@@ -401,7 +401,7 @@ class LibraryRepository(val context: Context) {
     }
 
     private fun asmrClient(source: SourceEntity): AsmrOneClient {
-        require(source.kind == "asmrone") { "来源类型不匹配" }
+        require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
         return AsmrOneClient(onlineHttp, source.root.toHttpUrlOrNull() ?: error("来源地址无效"))
     }
 
@@ -516,7 +516,7 @@ class LibraryRepository(val context: Context) {
                     val location =
                         runBlocking(Dispatchers.IO) {
                             val source = dao.source(sourceId) ?: throw IOException("来源已移除")
-                            require(source.kind == "asmrone") { "来源类型不匹配" }
+                            require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
                             dao.locations(asset).firstOrNull { it.sourceId == sourceId }
                                 ?: throw IOException("文件已移除")
                         }
@@ -529,7 +529,7 @@ class LibraryRepository(val context: Context) {
                 val source =
                     runBlocking(Dispatchers.IO) { dao.source(sourceId) }
                         ?: throw IOException("来源已移除")
-                require(source.kind == "smb") { "来源类型不匹配" }
+                require(source.kindType == SourceKind.SMB) { "来源类型不匹配" }
                 smb.open(source, secrets.decrypt(source.secret), uri)
             }
         val nfsData =
@@ -538,7 +538,7 @@ class LibraryRepository(val context: Context) {
                 val source =
                     runBlocking(Dispatchers.IO) { dao.source(sourceId) }
                         ?: throw IOException("来源已移除")
-                require(source.kind == "nfs") { "来源类型不匹配" }
+                require(source.kindType == SourceKind.NFS) { "来源类型不匹配" }
                 nfs.open(source, uri)
             }
         val dlsiteData =
@@ -548,7 +548,7 @@ class LibraryRepository(val context: Context) {
                         val current = dlsiteClients[sourceId]
                         val source = dao.source(sourceId)
                         if (
-                            source?.kind == "dlsite" &&
+                            source?.kindType == SourceKind.DLSITE &&
                                 (client != null && current === client ||
                                     client == null && current == null && source.secret.isBlank())
                         ) {
@@ -748,7 +748,7 @@ class LibraryRepository(val context: Context) {
         val knownSources = sources.value.ifEmpty { runBlocking(Dispatchers.IO) { dao.sources() } }
         val source =
             knownSources.firstOrNull { source ->
-                source.kind == "webdav" &&
+                source.kindType == SourceKind.WEBDAV &&
                     (source.root.trimEnd('/') + "/").toHttpUrlOrNull()?.let {
                         WebDavClient.insideRoot(url, it)
                     } == true
@@ -785,7 +785,7 @@ class LibraryRepository(val context: Context) {
 
     suspend fun addLocal(root: String, name: String): String {
         val id = stableId(root)
-        dao.putSource(SourceEntity(id, name, "local", root))
+        dao.putSource(SourceEntity(id, name, SourceKind.LOCAL.raw, root))
         scheduleScan(id)
         return id
     }
@@ -813,7 +813,7 @@ class LibraryRepository(val context: Context) {
             SourceEntity(
                 id,
                 name.ifBlank { url.host },
-                "webdav",
+                SourceKind.WEBDAV.raw,
                 normalized,
                 username.trim(),
                 secrets.encrypt(password),
@@ -833,7 +833,7 @@ class LibraryRepository(val context: Context) {
             SourceEntity(
                 id,
                 name.ifBlank { address.host },
-                "smb",
+                SourceKind.SMB.raw,
                 address.normalized,
                 account,
                 secrets.encrypt(password),
@@ -847,7 +847,7 @@ class LibraryRepository(val context: Context) {
     suspend fun addAsmrOne(): String {
         val id = stableId("asmr.one")
         if (dao.source(id) == null)
-            dao.putSource(SourceEntity(id, "ASMR.ONE", "asmrone", AsmrOneClient.API_ROOT))
+            dao.putSource(SourceEntity(id, "ASMR.ONE", SourceKind.ASMRONE.raw, AsmrOneClient.API_ROOT))
         return id
     }
 
@@ -860,7 +860,7 @@ class LibraryRepository(val context: Context) {
     ): String {
         val address = NfsAddress.parse(root, version, uid, gid)
         val id = stableId("nfs|${address.normalized}")
-        val source = SourceEntity(id, name.ifBlank { address.host }, "nfs", address.normalized)
+        val source = SourceEntity(id, name.ifBlank { address.host }, SourceKind.NFS.raw, address.normalized)
         withContext(Dispatchers.IO) { nfs.check(source) }
         dao.putSource(source)
         scheduleScan(id)
@@ -960,7 +960,7 @@ class LibraryRepository(val context: Context) {
                 val source = dao.source(sourceId) ?: error("来源已移除")
                 if (existingOnly && dao.work(stableId("asmr.one|work|$id")) == null)
                     return@withLock stableId("asmr.one|work|$id")
-                require(source.kind == "asmrone") { "来源类型不匹配" }
+                require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
                 commitAsmrPreview(previewAsmrWork(sourceId, id, metadataClient))
             }
         }
@@ -1221,7 +1221,7 @@ class LibraryRepository(val context: Context) {
             artwork(id)
                 ?: cacheArtwork(
                         id,
-                        if (source.kind == "dlsite")
+                        if (source.kindType == SourceKind.DLSITE)
                             onlineHttp.onlineBytes(
                                 okhttp3.Request.Builder()
                                     .url(url)
@@ -1259,13 +1259,13 @@ class LibraryRepository(val context: Context) {
         val startTime = android.os.SystemClock.elapsedRealtime()
         try {
             Log.i("WhispScan", "Started ${source.kind} scan")
-            if (source.kind == "dlsite") {
+            if (source.kindType == SourceKind.DLSITE) {
                 val client = dlsiteAccount(source.id)
                 dlsiteClient = client
                 syncDlsitePurchases(source.id, false, client)
                 return
             }
-            if (source.kind == "asmrone") {
+            if (source.kindType == SourceKind.ASMRONE) {
                 for (workId in dao.sourceWorkIds(source.id)) {
                     currentCoroutineContext().ensureActive()
                     val id = dao.work(workId)?.rj?.removePrefix("RJ")?.toLongOrNull() ?: continue
@@ -1279,11 +1279,11 @@ class LibraryRepository(val context: Context) {
                 return
             }
             val entries =
-                when (source.kind) {
-                    "local" -> LocalDirectory(context).walk(source.root)
-                    "smb" -> smb.walk(source, secrets.decrypt(source.secret))
-                    "nfs" -> nfs.walk(source)
-                    "webdav" -> dav.walk(source, secrets.decrypt(source.secret))
+                when (source.kindType) {
+                    SourceKind.LOCAL -> LocalDirectory(context).walk(source.root)
+                    SourceKind.SMB -> smb.walk(source, secrets.decrypt(source.secret))
+                    SourceKind.NFS -> nfs.walk(source)
+                    SourceKind.WEBDAV -> dav.walk(source, secrets.decrypt(source.secret))
                     else -> error("不支持的来源类型")
                 }
             val generation = System.currentTimeMillis()
@@ -1416,7 +1416,7 @@ class LibraryRepository(val context: Context) {
                     }
                 }
             }
-            if (source.kind == "dlsite") {
+            if (source.kindType == SourceKind.DLSITE) {
                 dlsiteCookieWrites.withLock {
                     dlsiteClient?.let { requireDlsiteClient(id, it) }
                     reportError()
@@ -1448,13 +1448,13 @@ class LibraryRepository(val context: Context) {
                 .orEmpty()
                 .filter {
                     it.durationMs == 0L &&
-                        (source.kind == "local" || it.fileName.endsWith(".mp3", true))
+                        (source.kindType == SourceKind.LOCAL || it.fileName.endsWith(".mp3", true))
                 }
                 .forEach { tasks += Asset(it.id, false) }
         }
         if (tasks.isEmpty()) return@coroutineScope
         val locations = indexed.locations.associateBy { it.assetId }
-        val password = if (source.kind != "local") secrets.decrypt(source.secret) else ""
+        val password = if (source.kindType != SourceKind.LOCAL) secrets.decrypt(source.secret) else ""
         val lanes = minOf(4, tasks.size)
         val processed = java.util.concurrent.atomic.AtomicInteger()
         val skipped = java.util.concurrent.atomic.AtomicInteger()
@@ -1471,8 +1471,8 @@ class LibraryRepository(val context: Context) {
                         durations.clear()
                     }
                     try {
-                        if (source.kind == "smb") session = smb.assets(source, password)
-                        if (source.kind == "nfs") session = nfs.assets(source)
+                        if (source.kindType == SourceKind.SMB) session = smb.assets(source, password)
+                        if (source.kindType == SourceKind.NFS) session = nfs.assets(source)
                         tasks
                             .filterIndexed { index, _ -> index % lanes == lane }
                             .forEachIndexed { index, asset ->
@@ -1493,10 +1493,10 @@ class LibraryRepository(val context: Context) {
                                     } else {
                                         val location = locations.getValue(asset.id)
                                         val duration =
-                                            when (source.kind) {
-                                                "smb",
-                                                "nfs" -> session!!.duration(location.uri)
-                                                "local" -> localDuration(asset.id)
+                                            when (source.kindType) {
+                                                SourceKind.SMB,
+                                                SourceKind.NFS -> session!!.duration(location.uri)
+                                                SourceKind.LOCAL -> localDuration(asset.id)
                                                 else ->
                                                     Mp3Metadata.duration(location.size) {
                                                         offset,
@@ -1547,7 +1547,7 @@ class LibraryRepository(val context: Context) {
 
     suspend fun removeSource(id: String) {
         WorkManager.getInstance(context).cancelUniqueWork("scan-$id")
-        if (dao.source(id)?.kind == "dlsite") {
+        if (dao.source(id)?.kindType == SourceKind.DLSITE) {
             for (workId in dao.sourceWorkIds(id)) {
                 WorkManager.getInstance(context).cancelUniqueWork("attachments-$workId")
                 dao.details(workId)
@@ -1594,9 +1594,9 @@ class LibraryRepository(val context: Context) {
             options.firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
                 ?: options.firstOrNull()
                 ?: return dao.workByCover(id)?.coverUrl ?: throw IOException("文件已移动或来源已移除")
-        return when (dao.source(location.sourceId)?.kind) {
-            "asmrone" -> "whisp-asmr://${location.sourceId}/$id"
-            "dlsite" -> "whisp-dlsite://${location.sourceId}/$id"
+        return when (dao.source(location.sourceId)?.kindType) {
+            SourceKind.ASMRONE -> "whisp-asmr://${location.sourceId}/$id"
+            SourceKind.DLSITE -> "whisp-dlsite://${location.sourceId}/$id"
             else -> location.uri
         }
     }
@@ -1780,10 +1780,10 @@ class LibraryRepository(val context: Context) {
                     val location =
                         dao.locations(id).firstOrNull { it.uri == uri.toString() } ?: error("来源未关联")
                     val source = dao.source(location.sourceId) ?: error("来源已移除")
-                    when (source.kind) {
-                        "smb" ->
+                    when (source.kindType) {
+                        SourceKind.SMB ->
                             smb.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
-                        "nfs" -> nfs.bytes(source, uri.toString(), limit)
+                        SourceKind.NFS -> nfs.bytes(source, uri.toString(), limit)
                         else ->
                             dav.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
                     }
