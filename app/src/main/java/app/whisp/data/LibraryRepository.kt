@@ -449,6 +449,42 @@ class LibraryRepository(val context: Context) {
         progressWriter.flush()
     }
 
+    // UI-facing reads and writes; screens go through these instead of the DAO.
+    suspend fun track(id: String): TrackEntity? = dao.track(id)
+
+    suspend fun workDetails(id: String): WorkDetails? = dao.details(id)
+
+    suspend fun progress(workId: String): ProgressEntity? = dao.progress(workId)
+
+    suspend fun latestProgress(): ProgressEntity? = dao.latestProgress()
+
+    suspend fun latestDetails(): WorkDetails? {
+        val progress = dao.latestProgress() ?: return null
+        return dao.details(progress.workId)
+    }
+
+    suspend fun source(id: String): SourceEntity? = dao.source(id)
+
+    suspend fun sourceWorkIds(id: String): List<String> = dao.sourceWorkIds(id)
+
+    suspend fun sourceWorkTrackIds(sourceId: String): Set<String> =
+        dao.sourceWorkIds(sourceId)
+            .flatMap { dao.details(it)?.tracks.orEmpty() }
+            .map { it.id }
+            .toSet()
+
+    suspend fun toggleFavorite(id: String) {
+        dao.toggleFavorite(id)
+    }
+
+    suspend fun saveBookmark(bookmark: BookmarkEntity) {
+        dao.saveBookmark(bookmark)
+    }
+
+    suspend fun deleteBookmark(id: String) {
+        dao.deleteBookmark(id)
+    }
+
     val bookmarks = dao.observeBookmarks().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val busy = MutableStateFlow<Set<String>>(emptySet())
     private val scanOwners = java.util.concurrent.ConcurrentHashMap<String, Any>()

@@ -496,7 +496,7 @@ internal fun PlayerPage(
                                 dismiss()
                             }
                         IconAction(Icons.Outlined.Close, "删除片段", Muted) {
-                            model.action { model.repository.dao.deleteBookmark(saved.id) }
+                            model.deleteBookmark(saved.id)
                         }
                     }
                 }
