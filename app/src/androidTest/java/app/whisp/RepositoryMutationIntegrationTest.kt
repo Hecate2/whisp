@@ -170,7 +170,7 @@ class RepositoryMutationIntegrationTest {
                 writeBytes(byteArrayOf(1, 2, 3))
             }
         try {
-            repo.setCover(original, android.net.Uri.fromFile(picture))
+            repo.offlineStore.setCover(original, android.net.Uri.fromFile(picture))
             val latest = repo.dao.work(original.id)!!
             assertEquals("After", latest.title)
             assertTrue(latest.favorite)
@@ -224,9 +224,9 @@ class RepositoryMutationIntegrationTest {
         )
         try {
             coroutineScope {
-                val writer = async(Dispatchers.IO) { repo.downloadAttachments(workId) }
+                val writer = async(Dispatchers.IO) { repo.offlineStore.downloadAttachments(workId) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
-                val removal = async(Dispatchers.IO) { repo.removeOffline(workId) }
+                val removal = async(Dispatchers.IO) { repo.offlineStore.removeOffline(workId) }
                 delay(100)
                 release.countDown()
                 withTimeout(10_000) { awaitAll(writer, removal) }
@@ -265,7 +265,7 @@ class RepositoryMutationIntegrationTest {
                 writeBytes(byteArrayOf(1, 2, 3))
             }
         try {
-            repo.removeOffline(first.id)
+            repo.offlineStore.removeOffline(first.id)
             assertTrue("The second account still owns the pinned cover", cover.isFile)
             assertTrue(repo.dao.work(second.id)!!.offlineAttachments)
             repo.removeAsmrWork(first.id)

@@ -171,7 +171,7 @@ class NfsIntegrationTest {
                 }
             }
             assertTrue(main { controller.duration in 29_000..31_000 })
-            repo.downloadWork(workId)
+            repo.offlineStore.downloadWork(workId)
             withTimeout(45_000) {
                 repo.downloads.first { it[track.id]?.state == Download.STATE_COMPLETED }
             }
@@ -182,7 +182,7 @@ class NfsIntegrationTest {
             main { controller.clearMediaItems() }
             repo.removeSource(source.id)
             val saved = repo.dao.details(workId)!!
-            assertTrue(repo.isOffline(saved))
+            assertTrue(repo.offlineStore.isOffline(saved))
             assertEquals(
                 "示例字幕",
                 SubtitleTimeline.parse(
@@ -203,7 +203,7 @@ class NfsIntegrationTest {
                 controller.pause()
                 controller.clearMediaItems()
             }
-            repo.removeOffline(workId)
+            repo.offlineStore.removeOffline(workId)
         } finally {
             future?.let { main { MediaController.releaseFuture(it) } }
             repo.removeSource(source.id)

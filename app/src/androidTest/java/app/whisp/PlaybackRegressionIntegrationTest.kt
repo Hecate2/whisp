@@ -290,7 +290,7 @@ class PlaybackRegressionIntegrationTest {
                 c.release()
             }
             runBlocking {
-                repo.removeOffline(detail.work.id)
+                repo.offlineStore.removeOffline(detail.work.id)
                 withTimeout(15_000) { repo.downloads.first { first.id !in it } }
             }
         }
