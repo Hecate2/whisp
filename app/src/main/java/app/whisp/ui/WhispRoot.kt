@@ -53,6 +53,7 @@ import androidx.navigation3.ui.NavDisplay
 import androidx.navigationevent.NavigationEvent
 import app.whisp.data.*
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import java.io.File
 import kotlinx.coroutines.launch
@@ -115,6 +116,8 @@ internal fun Artwork(
         remember(file, revision) {
             ImageRequest.Builder(context)
                 .data(file)
+                // Files already live in the app cache; a second Coil copy only doubles IO.
+                .diskCachePolicy(CachePolicy.DISABLED)
                 .memoryCacheKey(
                     file?.let { "${it.absolutePath}|${it.lastModified()}|${it.length()}" },
                 )

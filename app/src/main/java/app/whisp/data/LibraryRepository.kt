@@ -54,6 +54,20 @@ class LibraryRepository(val context: Context) {
     val database = Room.databaseBuilder(context, LibraryDatabase::class.java, "library.db").build()
     val dao = database.library()
     val secrets = SecretStore()
+    private val secretCache =
+        object : LinkedHashMap<String, String>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, String>): Boolean =
+                size > 32
+        }
+
+    // Keystore decryption runs on every media open and HTTP request; the key
+    // carries the ciphertext so a password change never reads stale.
+    private fun sourceSecret(source: SourceEntity): String =
+        synchronized(secretCache) {
+            secretCache.getOrPut(source.id + "|" + source.secret) {
+                secrets.decrypt(source.secret)
+            }
+        }
     // Redirects are disabled so credentials never travel to a different server.
     val http =
         OkHttpClient.Builder()
@@ -81,7 +95,7 @@ class LibraryRepository(val context: Context) {
             if (source.secret.isBlank()) throw DlsiteLoginRequired()
             lateinit var session: DlsiteSession
             session =
-                DlsiteSession(secrets.decrypt(source.secret)) {
+                DlsiteSession(sourceSecret(source)) {
                     scope.launch {
                         dlsiteCookieWrites.withLock {
                             dao.source(sourceId)
@@ -566,7 +580,7 @@ class LibraryRepository(val context: Context) {
                     runBlocking(Dispatchers.IO) { dao.source(sourceId) }
                         ?: throw IOException("来源已移除")
                 require(source.kindType == SourceKind.SMB) { "来源类型不匹配" }
-                smb.open(source, secrets.decrypt(source.secret), uri)
+                smb.open(source, sourceSecret(source), uri)
             }
         val nfsData =
             RemoteFileDataSource("NFS") { uri ->
@@ -792,7 +806,7 @@ class LibraryRepository(val context: Context) {
         if (source.username.isBlank()) return emptyMap()
         return mapOf(
             "Authorization" to
-                Credentials.basic(source.username, secrets.decrypt(source.secret), Charsets.UTF_8),
+                Credentials.basic(source.username, sourceSecret(source), Charsets.UTF_8),
         )
     }
 
@@ -1306,9 +1320,9 @@ class LibraryRepository(val context: Context) {
             val entries =
                 when (source.kindType) {
                     SourceKind.LOCAL -> LocalDirectory(context).walk(source.root)
-                    SourceKind.SMB -> smb.walk(source, secrets.decrypt(source.secret))
+                    SourceKind.SMB -> smb.walk(source, sourceSecret(source))
                     SourceKind.NFS -> nfs.walk(source)
-                    SourceKind.WEBDAV -> dav.walk(source, secrets.decrypt(source.secret))
+                    SourceKind.WEBDAV -> dav.walk(source, sourceSecret(source))
                     else -> error("不支持的来源类型")
                 }
             val generation = System.currentTimeMillis()
@@ -1479,7 +1493,7 @@ class LibraryRepository(val context: Context) {
         }
         if (tasks.isEmpty()) return@coroutineScope
         val locations = indexed.locations.associateBy { it.assetId }
-        val password = if (source.kindType != SourceKind.LOCAL) secrets.decrypt(source.secret) else ""
+        val password = if (source.kindType != SourceKind.LOCAL) sourceSecret(source) else ""
         val lanes = minOf(4, tasks.size)
         val processed = java.util.concurrent.atomic.AtomicInteger()
         val skipped = java.util.concurrent.atomic.AtomicInteger()
@@ -1769,10 +1783,10 @@ class LibraryRepository(val context: Context) {
                     val source = dao.source(location.sourceId) ?: error("来源已移除")
                     when (source.kindType) {
                         SourceKind.SMB ->
-                            smb.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                            smb.bytes(uri.toString(), source, sourceSecret(source), limit)
                         SourceKind.NFS -> nfs.bytes(source, uri.toString(), limit)
                         else ->
-                            dav.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                            dav.bytes(uri.toString(), source, sourceSecret(source), limit)
                     }
                 }
             }
