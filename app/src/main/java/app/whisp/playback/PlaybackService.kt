@@ -25,6 +25,8 @@ import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
@@ -44,6 +46,8 @@ class PlaybackService : MediaLibraryService() {
     private var pendingLoopSeek: Pair<String?, Long>? = null
     private var automaticLoopSeek = false
     private var videoController: MediaSession.ControllerInfo? = null
+    private val decoderRecords = Mutex()
+    private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
 
     companion object {
         const val TIMER = "whisp.timer"
@@ -70,24 +74,18 @@ class PlaybackService : MediaLibraryService() {
                 .setSeekForwardIncrementMs(10000)
                 .build()
         setVideoEnabled(false)
-        if (AudioOffload.supported(Build.VERSION.SDK_INT)) {
-            player.trackSelectionParameters =
-                player.trackSelectionParameters
-                    .buildUpon()
-                    .setAudioOffloadPreferences(AudioOffload.preferences())
-                    .build()
-        }
+        updateAudioOffload()
         player.addAnalyticsListener(
             object : AnalyticsListener {
-                private var audioFormat: Format? = null
-                private var videoFormat: Format? = null
-
                 override fun onAudioInputFormatChanged(
                     eventTime: AnalyticsListener.EventTime,
                     format: Format,
                     decoderReuseEvaluation: DecoderReuseEvaluation?,
                 ) {
-                    audioFormat = format
+                    decoderCorrelator.onFormatChanged(
+                        "audio",
+                        FormatSnapshot(format.sampleMimeType, format.codecs),
+                    )
                 }
 
                 override fun onVideoInputFormatChanged(
@@ -95,7 +93,10 @@ class PlaybackService : MediaLibraryService() {
                     format: Format,
                     decoderReuseEvaluation: DecoderReuseEvaluation?,
                 ) {
-                    videoFormat = format
+                    decoderCorrelator.onFormatChanged(
+                        "video",
+                        FormatSnapshot(format.sampleMimeType, format.codecs),
+                    )
                 }
 
                 override fun onAudioDecoderInitialized(
@@ -104,7 +105,7 @@ class PlaybackService : MediaLibraryService() {
                     initializedTimestampMs: Long,
                     initializationDurationMs: Long,
                 ) {
-                    recordDecoder("audio", audioFormat, decoderName)
+                    decoderCorrelator.onDecoderInitialized("audio", decoderName)
                 }
 
                 override fun onVideoDecoderInitialized(
@@ -113,7 +114,7 @@ class PlaybackService : MediaLibraryService() {
                     initializedTimestampMs: Long,
                     initializationDurationMs: Long,
                 ) {
-                    recordDecoder("video", videoFormat, decoderName)
+                    decoderCorrelator.onDecoderInitialized("video", decoderName)
                 }
             },
         )
@@ -157,6 +158,7 @@ class PlaybackService : MediaLibraryService() {
                         loopEnd = -1
                         player.setPauseAtEndOfMediaItems(false)
                         publishExtras()
+                        updateAudioOffload()
                         saveProgress()
                     }
                 }
@@ -215,6 +217,7 @@ class PlaybackService : MediaLibraryService() {
                         loopEnd = -1
                         player.setPauseAtEndOfMediaItems(false)
                         publishExtras()
+                        updateAudioOffload()
                     }
                     if (!loopSeek) saveProgress()
                 }
@@ -393,6 +396,7 @@ class PlaybackService : MediaLibraryService() {
                                             args.getInt("minutes", 0),
                                         )
                                     scheduleTimer()
+                                    updateAudioOffload()
                                 }
                                 LOOP -> {
                                     val segment =
@@ -410,6 +414,7 @@ class PlaybackService : MediaLibraryService() {
                                     pendingLoopSeek = null
                                     automaticLoopSeek = false
                                     reconcilePlaybackJobs()
+                                    updateAudioOffload()
                                 }
                                 else ->
                                     return Futures.immediateFuture(
@@ -560,6 +565,7 @@ class PlaybackService : MediaLibraryService() {
             timerEnd = 0
             player.pause()
             publishExtras()
+            updateAudioOffload()
             saveProgress()
         }
     }
@@ -587,24 +593,48 @@ class PlaybackService : MediaLibraryService() {
         )
     }
 
-    private fun recordDecoder(kind: String, format: Format?, decoderName: String) {
+    private fun updateAudioOffload() {
+        if (!AudioOffload.supported(Build.VERSION.SDK_INT)) return
+        // Loop polling and the sleep timer rely on Handler deadlines, which stall
+        // while offloaded playback lets the CPU sleep. Switching the preference
+        // reselections the audio track, so only do it on loop/timer transitions.
+        player.trackSelectionParameters =
+            player.trackSelectionParameters
+                .buildUpon()
+                .setAudioOffloadPreferences(
+                    AudioOffload.preferences(
+                        enabled =
+                            !AudioOffload.needsPreciseDeadline(loopStart, loopEnd, timerEnd),
+                    ),
+                )
+                .build()
+    }
+
+    private fun onCorrelatedDecoder(
+        kind: String,
+        snapshot: FormatSnapshot?,
+        decoder: String?,
+        replaceProvisional: Boolean,
+    ) {
         scope.launch(Dispatchers.IO) {
-            val candidates = runCatching {
-                val mime = format?.sampleMimeType ?: return@runCatching emptyList<CodecCandidate>()
-                MediaCodecUtil.getDecoderInfos(mime, false, false).map {
-                    CodecCandidate(it.name, it.hardwareAccelerated)
+            decoderRecords.withLock {
+                val candidates = runCatching {
+                    val mime = snapshot?.mime ?: return@runCatching emptyList<CodecCandidate>()
+                    MediaCodecUtil.getDecoderInfos(mime, false, false)
+                        .map { CodecCandidate(it.name, it.hardwareAccelerated) }
                 }
+                    .getOrDefault(emptyList())
+                val event =
+                    DecoderAudit.resolve(
+                        kind,
+                        snapshot?.mime,
+                        snapshot?.codecs,
+                        decoder,
+                        candidates,
+                    )
+                if (replaceProvisional) repository.playbackDiagnostics.replaceLast(kind, event)
+                else repository.playbackDiagnostics.record(event)
             }
-                .getOrDefault(emptyList())
-            repository.playbackDiagnostics.record(
-                DecoderAudit.resolve(
-                    kind,
-                    format?.sampleMimeType,
-                    format?.codecs,
-                    decoderName,
-                    candidates,
-                ),
-            )
         }
     }
 
