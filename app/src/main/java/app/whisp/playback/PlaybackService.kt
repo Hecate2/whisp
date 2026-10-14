@@ -46,8 +46,9 @@ class PlaybackService : MediaLibraryService() {
     private var pendingLoopSeek: Pair<String?, Long>? = null
     private var automaticLoopSeek = false
     private var videoController: MediaSession.ControllerInfo? = null
-    private val diagnosticTasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)
-    private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
+    // Player callbacks arrive serially on the main thread, so enqueue order
+    // matches event order and the single consumer below preserves it.
+    private val diagnosticTasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)    private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
 
     companion object {
         const val TIMER = "whisp.timer"
@@ -76,7 +77,15 @@ class PlaybackService : MediaLibraryService() {
         setVideoEnabled(false)
         updateAudioOffload()
         scope.launch(Dispatchers.IO) {
-            for (task in diagnosticTasks) task()
+            // A single consumer keeps dispatch order. Isolate failures so one
+            // corrupt entry cannot stop all later diagnostics.
+            for (task in diagnosticTasks) {
+                try {
+                    task()
+                } catch (_: Exception) {
+                    android.util.Log.w("WhispPlayback", "Diagnostic write skipped")
+                }
+            }
         }
         player.addAnalyticsListener(
             object : AnalyticsListener {

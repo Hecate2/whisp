@@ -43,33 +43,6 @@ class PlaybackDiagnosticsTest {
     }
 
     @Test
-    fun provisionalEntryIsReplacedByItsFormat() {
-        val diagnostics = diagnostics()
-        diagnostics.record(DecoderEvent("audio", null, null, "aac-decoder", null))
-        diagnostics.replaceLast(
-            "audio",
-            DecoderEvent("audio", "audio/aac", null, "aac-decoder", true),
-        )
-        val snapshot = diagnostics.snapshot()
-        assertEquals(1, snapshot.size)
-        assertEquals("audio/aac", snapshot.single().mime)
-        assertEquals(true, snapshot.single().hardwareAccelerated)
-    }
-
-    @Test
-    fun replaceFallsBackToAppendForAnotherKind() {
-        val diagnostics = diagnostics()
-        diagnostics.record(DecoderEvent("audio", "audio/aac", null, "aac-decoder", true))
-        diagnostics.replaceLast(
-            "video",
-            DecoderEvent("video", "video/avc", null, "avc-decoder", true),
-        )
-        val snapshot = diagnostics.snapshot()
-        assertEquals(2, snapshot.size)
-        assertEquals("video/avc", snapshot.last().mime)
-    }
-
-    @Test
     fun replaceByIdFindsTheProvisionalAcrossOffload() {
         val diagnostics = diagnostics()
         diagnostics.record(DecoderEvent("audio", null, null, "aac-decoder", null, id = "init-1"))

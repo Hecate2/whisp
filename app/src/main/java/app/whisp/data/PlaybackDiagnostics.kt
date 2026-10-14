@@ -40,17 +40,6 @@ class PlaybackDiagnostics(private val context: Context) {
     }
 
     @Synchronized
-    fun replaceLast(kind: String, event: DecoderEvent) {
-        val previous = readEvents()
-        val encoded = encode(event)
-        writeEvents(
-            if (previous.lastOrNull()?.jsonObject?.get("kind")?.jsonPrimitive?.content == kind)
-                previous.dropLast(1) + encoded
-            else previous.takeLast(63) + encoded,
-        )
-    }
-
-    @Synchronized
     fun replaceById(id: String, event: DecoderEvent) {
         val previous = readEvents()
         val index = previous.indexOfFirst { it.jsonObject["id"]?.jsonPrimitive?.content == id }
