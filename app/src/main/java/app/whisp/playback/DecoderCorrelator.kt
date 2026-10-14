@@ -15,9 +15,9 @@ internal data class FormatSnapshot(val mime: String?, val codecs: String?)
  * format is always an in-place recovery, where the cached format is still current. A provisional
  * entry therefore never carries a stale format, even if no format event ever consumes it.
  *
- * A release always precedes the next init of the same renderer, so clearing here cannot drop a
- * live pairing. After a release, a format without a new init is bypass: it must not inherit the
- * released decoder.
+ * A release always precedes the next init of the same renderer, so clearing here cannot drop a live
+ * pairing. After a release, a format without a new init is bypass: it must not inherit the released
+ * decoder.
  *
  * Every emission carries a stable id so the sink can replace the provisional entry in place, no
  * matter what was recorded after it.
