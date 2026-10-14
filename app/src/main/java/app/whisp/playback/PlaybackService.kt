@@ -18,7 +18,6 @@ import app.whisp.data.ProgressEntity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -105,15 +104,16 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (
-                        playbackState == Player.STATE_ENDED &&
-                            player.playbackState == Player.STATE_ENDED &&
-                            player.playWhenReady
-                    )
-                        player.pause()
+                    if (playbackState == Player.STATE_ENDED && player.playWhenReady) player.pause()
                     val id = player.currentMediaItem?.mediaId ?: return
                     val duration = player.duration
-                    if (duration > 0)
+                    // Duration settles when content is ready; later buffering flips need no
+                    // rewrite.
+                    if (
+                        duration > 0 &&
+                            (playbackState == Player.STATE_READY ||
+                                playbackState == Player.STATE_ENDED)
+                    )
                         repository.scope.launch { repository.dao.updateDuration(id, duration) }
                     saveProgress()
                 }
@@ -266,7 +266,7 @@ class PlaybackService : MediaLibraryService() {
                                 return Futures.immediateFuture(
                                     LibraryResult.ofError(SessionError.ERROR_BAD_VALUE),
                                 )
-                            return ioResult {
+                            return scope.ioResult {
                                 val snapshot = if (page == 0) catalog.snapshot() else null
                                 LibraryResult.ofItemList(
                                     if (snapshot == null) emptyList()
@@ -284,7 +284,7 @@ class PlaybackService : MediaLibraryService() {
                             if (mediaId == RECENT_ROOT) {
                                 Futures.immediateFuture(LibraryResult.ofItem(recentRoot(), null))
                             } else
-                                ioResult {
+                                scope.ioResult {
                                     val snapshot = catalog.snapshot()
                                     if (
                                         snapshot == null ||
@@ -298,7 +298,7 @@ class PlaybackService : MediaLibraryService() {
                             session: MediaSession,
                             controller: MediaSession.ControllerInfo,
                             mediaItems: List<MediaItem>,
-                        ): ListenableFuture<List<MediaItem>> = ioResult {
+                        ): ListenableFuture<List<MediaItem>> = scope.ioResult {
                             mediaItems.map { item ->
                                 val track = repository.dao.track(item.mediaId) ?: error("音轨不可用")
                                 val work = repository.dao.work(track.workId) ?: error("作品不可用")
@@ -329,28 +329,23 @@ class PlaybackService : MediaLibraryService() {
                                     )
                                 }
                                 TIMER -> {
-                                    val minutes = args.getInt("minutes", 0).coerceIn(0, 180)
                                     timerEnd =
-                                        if (minutes == 0) 0
-                                        else SystemClock.elapsedRealtime() + minutes * 60_000L
+                                        SleepTimer.deadlineMs(
+                                            SystemClock.elapsedRealtime(),
+                                            args.getInt("minutes", 0),
+                                        )
                                     scheduleTimer()
                                 }
                                 LOOP -> {
-                                    loopStart = args.getLong("start", -1)
-                                    val duration = player.duration.takeIf { it > 0 }
-                                    loopEnd =
-                                        args.getLong("end", -1).let {
-                                            if (duration == null) it else it.coerceAtMost(duration)
-                                        }
-                                    if (
-                                        player.currentMediaItem == null ||
-                                            loopStart < 0 ||
-                                            loopEnd <= loopStart ||
-                                            loopEnd - loopStart < 500
-                                    ) {
-                                        loopStart = -1
-                                        loopEnd = -1
-                                    }
+                                    val segment =
+                                        LoopState.validate(
+                                            args.getLong("start", -1),
+                                            args.getLong("end", -1),
+                                            player.duration.takeIf { it > 0 },
+                                            player.currentMediaItem != null,
+                                        )
+                                    loopStart = segment?.startMs ?: -1
+                                    loopEnd = segment?.endMs ?: -1
                                     player.setPauseAtEndOfMediaItems(loopStart >= 0)
                                     loopJob?.cancel()
                                     loopJob = null
@@ -373,26 +368,30 @@ class PlaybackService : MediaLibraryService() {
                             session: MediaSession,
                             controller: MediaSession.ControllerInfo,
                             isForPlayback: Boolean,
-                        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = ioResult {
-                            val snapshot = catalog.snapshot() ?: error("暂无播放记录")
-                            if (isForPlayback) {
-                                val items =
-                                    snapshot.tracks.map { repository.mediaItem(it, snapshot.work) }
-                                MediaSession.MediaItemsWithStartPosition(
-                                    items,
-                                    snapshot.position.index,
-                                    snapshot.position.positionMs,
-                                )
-                            } else {
-                                // Boot-time requests must not resolve audio or connect to a remote
-                                // source.
-                                MediaSession.MediaItemsWithStartPosition(
-                                    listOf(catalog.recentItem(snapshot)),
-                                    0,
-                                    snapshot.position.positionMs,
-                                )
+                        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+                            scope.ioResult {
+                                val snapshot = catalog.snapshot() ?: error("暂无播放记录")
+                                if (isForPlayback) {
+                                    val items =
+                                        snapshot.tracks.map {
+                                            repository.mediaItem(it, snapshot.work)
+                                        }
+                                    MediaSession.MediaItemsWithStartPosition(
+                                        items,
+                                        snapshot.position.index,
+                                        snapshot.position.positionMs,
+                                    )
+                                } else {
+                                    // Boot-time requests must not resolve audio or connect to a
+                                    // remote
+                                    // source.
+                                    MediaSession.MediaItemsWithStartPosition(
+                                        listOf(catalog.recentItem(snapshot)),
+                                        0,
+                                        snapshot.position.positionMs,
+                                    )
+                                }
                             }
-                        }
                     },
                 )
                 .setSessionActivity(
@@ -451,9 +450,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun reconcilePlaybackJobs() {
+        val state = player.playbackState
         if (
-            player.playWhenReady &&
-                player.playbackState in listOf(Player.STATE_READY, Player.STATE_BUFFERING)
+            player.playWhenReady && (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
         ) {
             if (checkpointJob?.isActive != true)
                 checkpointJob = scope.launch {
@@ -519,26 +518,6 @@ class PlaybackService : MediaLibraryService() {
                     .build(),
             )
             .build()
-
-    private fun <T> ioResult(block: suspend () -> T): ListenableFuture<T> {
-        val result = SettableFuture.create<T>()
-        val job =
-            scope.launch(Dispatchers.IO) {
-                try {
-                    result.set(block())
-                } catch (e: CancellationException) {
-                    result.cancel(false)
-                } catch (e: Exception) {
-                    result.setException(e)
-                }
-            }
-        job.invokeOnCompletion { if (it is CancellationException) result.cancel(false) }
-        result.addListener(
-            { if (result.isCancelled) job.cancel() },
-            com.google.common.util.concurrent.MoreExecutors.directExecutor(),
-        )
-        return result
-    }
 
     private fun publishExtras() {
         session?.setSessionExtras(

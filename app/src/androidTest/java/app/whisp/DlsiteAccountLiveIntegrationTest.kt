@@ -136,7 +136,7 @@ class DlsiteAccountLiveIntegrationTest {
                 it.playbackState == Player.STATE_READY && it.currentPosition > target + 1200
             }
             onMain { it.stop() }
-            repo.downloadAttachments(detail.work.id)
+            repo.offlineStore.downloadAttachments(detail.work.id)
             val request =
                 DownloadRequest.Builder(track.id, item.localConfiguration!!.uri)
                     .setCustomCacheKey(track.id)
@@ -165,7 +165,7 @@ class DlsiteAccountLiveIntegrationTest {
             )
         } finally {
             instrumentation.runOnMainSync { player?.release() }
-            repo.removeOffline(detail.work.id)
+            repo.offlineStore.removeOffline(detail.work.id)
             repo.removeAsmrWork(detail.work.id)
         }
     }

@@ -209,7 +209,7 @@ class VideoPlaybackIntegrationTest {
                 }
             }
             assertFrame()
-            runBlocking { repo.downloadWork(detail.work.id) }
+            runBlocking { repo.offlineStore.downloadWork(detail.work.id) }
             waitFor(15000) {
                 repo.downloads.value[video.id]?.state == Download.STATE_COMPLETED
             }
@@ -219,7 +219,7 @@ class VideoPlaybackIntegrationTest {
             main { controller.clearMediaItems() }
             runBlocking { repo.removeSource(source.id) }
             val saved = runBlocking { repo.dao.details(detail.work.id)!! }
-            assertTrue(repo.isOffline(saved))
+            assertTrue(repo.offlineStore.isOffline(saved))
             val item = runBlocking { repo.mediaItem(video, saved.work) }
             main {
                 controller.setMediaItem(item)
@@ -236,7 +236,7 @@ class VideoPlaybackIntegrationTest {
             }
             runBlocking {
                 repo.removeSource(source.id)
-                repo.removeOffline(detail.work.id)
+                repo.offlineStore.removeOffline(detail.work.id)
             }
         }
     }
@@ -318,7 +318,7 @@ class VideoPlaybackIntegrationTest {
                 }
             }
             assertTrue(main { controller.currentPosition >= 15000 })
-            runBlocking { repo.downloadWork(detail.work.id) }
+            runBlocking { repo.offlineStore.downloadWork(detail.work.id) }
             waitFor(15000) {
                 detail.tracks.all { repo.downloads.value[it.id]?.state == Download.STATE_COMPLETED }
             }
@@ -329,7 +329,7 @@ class VideoPlaybackIntegrationTest {
             runBlocking { repo.removeSource(seedId + "-source") }
             File(repo.context.filesDir, "video-fixture").deleteRecursively()
             val saved = runBlocking { repo.dao.details(detail.work.id)!! }
-            assertTrue(repo.isOffline(saved))
+            assertTrue(repo.offlineStore.isOffline(saved))
             val item = runBlocking { repo.mediaItem(video, saved.work) }
             main {
                 controller.setMediaItem(item)
@@ -347,7 +347,7 @@ class VideoPlaybackIntegrationTest {
             }
             runBlocking {
                 repo.removeSource(seedId + "-source")
-                repo.removeOffline(detail.work.id)
+                repo.offlineStore.removeOffline(detail.work.id)
             }
         }
     }

@@ -23,40 +23,6 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-data class DlsiteUiState(
-    val details: DlsiteDetails? = null,
-    val loading: Set<String> = emptySet(),
-    val errors: Map<String, String> = emptyMap(),
-)
-
-data class AsmrPreviewState(
-    val sourceId: String = "",
-    val seed: AsmrWork? = null,
-    val preview: AsmrPreview? = null,
-    val loading: Boolean = false,
-    val error: String? = null,
-)
-
-data class PlaybackState(
-    val trackId: String? = null,
-    val playing: Boolean = false,
-    val positionMs: Long = 0,
-    val durationMs: Long = 0,
-    val buffering: Boolean = false,
-    val timerEnd: Long = 0,
-    val loopStart: Long = -1,
-    val loopEnd: Long = -1,
-    val playWhenReady: Boolean = false,
-    val hasPrevious: Boolean = false,
-    val hasNext: Boolean = false,
-    val ended: Boolean = false,
-    val failed: Boolean = false,
-    val queueIds: List<String> = emptyList(),
-    val hasVideo: Boolean = false,
-    val videoAspectRatio: Float = 16f / 9f,
-    val tracksKnown: Boolean = false,
-)
-
 @androidx.annotation.OptIn(UnstableApi::class)
 class AppViewModel(
     val repository: LibraryRepository,
@@ -126,7 +92,7 @@ class AppViewModel(
                 metadata = dlsiteStates.value[preview.work.workId]?.details ?: preview.metadata,
             ),
         )
-        return repository.dao.details(preview.work.workId) ?: error("作品保存失败")
+        return repository.workDetails(preview.work.workId) ?: error("作品保存失败")
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -157,15 +123,11 @@ class AppViewModel(
                     .flow
             }
             .cachedIn(viewModelScope)
-    val dlsiteStates = MutableStateFlow<Map<String, DlsiteUiState>>(emptyMap())
-    private val dlsiteJobs = mutableMapOf<String, Job>()
+    private val dlsiteLoader = DlsiteDetailsLoader(viewModelScope, repository)
+    val dlsiteStates: StateFlow<Map<String, DlsiteUiState>>
+        get() = dlsiteLoader.states
 
-    fun acceptDlsiteDetails(id: String, details: DlsiteDetails) {
-        dlsiteStates.update { previous ->
-            val state = previous[id] ?: return@update previous
-            previous + (id to state.copy(details = details.preserving(state.details)))
-        }
-    }
+    fun acceptDlsiteDetails(id: String, details: DlsiteDetails) = dlsiteLoader.accept(id, details)
 
     fun loadDlsiteDetails(
         workId: String,
@@ -174,81 +136,7 @@ class AppViewModel(
         seed: DlsiteDetails? = null,
         force: Boolean = false,
         client: DlsiteClient = repository.dlsite,
-    ) {
-        require(part in setOf("product", "description", "statistics"))
-        val key = "$workId|$part"
-        if (dlsiteJobs[key]?.isActive == true) return
-        fun update(block: (DlsiteUiState) -> DlsiteUiState) {
-            dlsiteStates.update { states ->
-                val next = LinkedHashMap(states)
-                next[workId] = block(states[workId] ?: DlsiteUiState())
-                while (next.size > 12) next.remove(next.keys.first())
-                next
-            }
-        }
-        if (dlsiteJobs.size >= 6) dlsiteJobs.remove(dlsiteJobs.keys.first())?.cancel()
-        // Register ownership before launching: a cancelled, evicted request can finish
-        // after a replacement for the same key has already begun.
-        val job =
-            viewModelScope.launch(start = CoroutineStart.LAZY) {
-                try {
-                    val cached =
-                        dlsiteStates.value[workId]?.details
-                            ?: seed
-                            ?: repository.readDlsiteDetails(workId)
-                    if (cached != null) update { it.copy(details = cached.preserving(it.details)) }
-                    val now = System.currentTimeMillis()
-                    val ready =
-                        when (part) {
-                            "product" ->
-                                cached?.completeProduct == true &&
-                                    now - cached.productFetchedAt < 7 * 24 * 60 * 60 * 1000L
-                            "description" -> cached != null && cached.descriptionFetchedAt > 0
-                            else ->
-                                cached?.statistics?.let {
-                                    now - it.fetchedAt < 24 * 60 * 60 * 1000L
-                                } == true
-                        }
-                    if (ready && !force) return@launch
-                    update { it.copy(loading = it.loading + part, errors = it.errors - part) }
-                    val fresh =
-                        when (part) {
-                            "product" -> client.work(rj).details
-                            "description" -> {
-                                val blocks = client.description(rj)
-                                (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
-                                    description = blocks,
-                                    descriptionFetchedAt = System.currentTimeMillis(),
-                                )
-                            }
-                            else -> {
-                                val statistics = client.statistics(rj)
-                                (dlsiteStates.value[workId]?.details ?: DlsiteDetails(rj)).copy(
-                                    statistics = statistics,
-                                )
-                            }
-                        }
-                    val merged = fresh.preserving(dlsiteStates.value[workId]?.details)
-                    repository.saveDlsiteDetails(workId, merged)
-                    update { it.copy(details = merged.preserving(it.details)) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    update { it.copy(errors = it.errors + (part to (e.message ?: "DLsite 读取失败"))) }
-                } finally {
-                    if (
-                        dlsiteJobs[key] == null ||
-                            dlsiteJobs[key] === currentCoroutineContext()[Job]
-                    ) {
-                        update { it.copy(loading = it.loading - part) }
-                        dlsiteJobs.remove(key)
-                    }
-                }
-            }
-        dlsiteJobs[key] = job
-        job.invokeOnCompletion { if (dlsiteJobs[key] === job) dlsiteJobs.remove(key) }
-        job.start()
-    }
+    ) = dlsiteLoader.load(workId, rj, part, seed, force, client)
 
     // Event snapshots never advance merely because playback time passes.
     val player = MutableStateFlow(PlaybackState())
@@ -461,7 +349,7 @@ class AppViewModel(
                 else
                     viewModelScope.launch {
                         try {
-                            val indexed = snapshots.map { repository.dao.track(it.id) ?: it }
+                            val indexed = snapshots.map { repository.track(it.id) ?: it }
                             ensureActive()
                             if (queueItems == items) {
                                 val latest = queueTracks.value.associateBy { it.id }
@@ -517,7 +405,7 @@ class AppViewModel(
         openingJob = viewModelScope.launch {
             try {
                 repository.flushPlaybackProgress()
-                val checkpoint = repository.dao.progress(detail.work.id)
+                val checkpoint = repository.progress(detail.work.id)
                 val activeId =
                     controller?.currentMediaItem?.mediaId?.takeIf { id ->
                         detail.tracks.any { it.id == id }
@@ -652,9 +540,7 @@ class AppViewModel(
             else if (c.mediaItemCount > 0) resume(c)
             else
                 action {
-                    repository.dao.latestProgress()?.let { p ->
-                        repository.dao.details(p.workId)?.let { playWork(it) }
-                    }
+                    repository.latestDetails()?.let { playWork(it) }
                 }
             updatePlayer()
         }
@@ -716,49 +602,22 @@ class AppViewModel(
         )
     }
 
-    fun favorite(id: String) = action { repository.dao.toggleFavorite(id) }
+    fun favorite(id: String) = action { repository.toggleFavorite(id) }
 
-    fun download(id: String) = action { repository.downloadWork(id) }
+    fun deleteBookmark(id: String) = action { repository.deleteBookmark(id) }
 
-    fun removeSource(sourceId: String) = action {
-        if (repository.dao.source(sourceId)?.kind == "dlsite") {
-            val workIds = repository.dao.sourceWorkIds(sourceId).toSet()
-            if (openingWorkId in workIds) {
-                ++openingGeneration
-                openingJob?.cancelAndJoin()
-                openingWorkId = null
-                openingTrackId.value = null
-            }
-            val trackIds =
-                workIds
-                    .flatMap { repository.dao.details(it)?.tracks.orEmpty() }
-                    .map { it.id }
-                    .toSet()
-            controller?.let { c ->
-                if (c.currentMediaItem?.mediaId in trackIds) {
-                    c.pause()
-                    c.stop()
-                    loadSubtitles(null)
-                }
-                for (index in c.mediaItemCount - 1 downTo 0) if (
-                    c.getMediaItemAt(index).mediaId in trackIds
-                )
-                    c.removeMediaItem(index)
-            }
-            trackIds.forEach { subtitleCache.remove(it) }
-        }
-        repository.removeSource(sourceId)
-        updatePlayer()
-    }
+    fun download(id: String) = action { repository.offlineStore.downloadWork(id) }
 
-    suspend fun removeAsmrWork(detail: WorkDetails) {
-        if (openingWorkId == detail.work.id) {
+    private suspend fun cancelOpening(workIds: Set<String>) {
+        if (openingWorkId in workIds) {
             ++openingGeneration
             openingJob?.cancelAndJoin()
             openingWorkId = null
             openingTrackId.value = null
         }
-        val ids = detail.tracks.map { it.id }.toSet()
+    }
+
+    private fun detachTracks(ids: Set<String>) {
         controller?.let { c ->
             if (c.currentMediaItem?.mediaId in ids) {
                 c.pause()
@@ -769,6 +628,21 @@ class AppViewModel(
                 c.removeMediaItem(index)
         }
         ids.forEach { subtitleCache.remove(it) }
+    }
+
+    fun removeSource(sourceId: String) = action {
+        if (repository.source(sourceId)?.kindType == SourceKind.DLSITE) {
+            cancelOpening(repository.sourceWorkIds(sourceId).toSet())
+            val trackIds = repository.sourceWorkTrackIds(sourceId)
+            detachTracks(trackIds)
+        }
+        repository.removeSource(sourceId)
+        updatePlayer()
+    }
+
+    suspend fun removeAsmrWork(detail: WorkDetails) {
+        cancelOpening(setOf(detail.work.id))
+        detachTracks(detail.tracks.map { it.id }.toSet())
         repository.removeAsmrWork(detail.work.id)
         updatePlayer()
     }
@@ -802,8 +676,8 @@ class AppViewModel(
         positionMs: Long = currentPosition(),
         trackId: String? = player.value.trackId,
     ) = action {
-        val track = repository.dao.track(trackId ?: return@action) ?: return@action
-        repository.dao.saveBookmark(
+        val track = repository.track(trackId ?: return@action) ?: return@action
+        repository.saveBookmark(
             BookmarkEntity(
                 UUID.randomUUID().toString(),
                 track.workId,
@@ -826,10 +700,10 @@ class AppViewModel(
         val job =
             viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    val track = repository.dao.track(id) ?: return@launch
+                    val track = repository.track(id) ?: return@launch
                     val attachmentId = track.subtitleId ?: return@launch
                     subtitleLoading.value = true
-                    val detail = repository.dao.details(track.workId) ?: return@launch
+                    val detail = repository.workDetails(track.workId) ?: return@launch
                     val attachment =
                         detail.attachments.firstOrNull { it.id == attachmentId } ?: return@launch
                     val bytes = repository.readAsset(attachment.id)

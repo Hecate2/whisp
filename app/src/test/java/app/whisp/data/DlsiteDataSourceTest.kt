@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
-import android.app.Application
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
 import java.io.IOException
+import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttp
@@ -16,11 +16,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
-import org.robolectric.annotation.Config
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
 class DlsiteDataSourceTest {
     @Before
     fun initializeHttp() {
@@ -47,9 +45,8 @@ class DlsiteDataSourceTest {
         MockResponse.Builder().body("""{"expires":"2099-01-01T00:00:00Z"}""").build()
 
     @Test
-    fun authorizationRefreshPreservesRangeAndRequestHeaders() {
-        MockWebServer().use { server ->
-            server.start()
+    fun authorizationRefreshPreservesRangeAndRequestHeaders() = runBlocking {
+        withMockServer { server ->
             server.enqueue(signature())
             server.enqueue(MockResponse.Builder().code(403).build())
             server.enqueue(signature())
@@ -93,9 +90,8 @@ class DlsiteDataSourceTest {
     }
 
     @Test
-    fun beyondEndRetainsTheMedia3PositionErrorAndExactEndIsEof() {
-        MockWebServer().use { server ->
-            server.start()
+    fun beyondEndRetainsTheMedia3PositionErrorAndExactEndIsEof() = runBlocking {
+        withMockServer { server ->
             for (position in listOf(7L, 6L)) {
                 server.enqueue(signature())
                 server.enqueue(

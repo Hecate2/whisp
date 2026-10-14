@@ -129,7 +129,7 @@ class SmbIntegrationTest {
             Thread.sleep(1500)
             assertTrue("SMB playback continues in the background", playing())
             instrumentation.runOnMainSync { controller.pause() }
-            runBlocking { repo.downloadWork(detail.work.id) }
+            runBlocking { repo.offlineStore.downloadWork(detail.work.id) }
             waitFor(180000) { repo.downloads.value[track.id]?.state == Download.STATE_COMPLETED }
             waitFor { runBlocking { repo.dao.details(detail.work.id)!!.work.offlineAttachments } }
             runBlocking { repo.removeSource(id) }
@@ -142,7 +142,9 @@ class SmbIntegrationTest {
             }
             waitFor { playing() }
             assertTrue(runBlocking { repo.readAsset(track.subtitleId!!) }.isNotEmpty())
-            assertTrue(repo.isOffline(runBlocking { repo.dao.details(detail.work.id)!! }))
+            assertTrue(
+                repo.offlineStore.isOffline(runBlocking { repo.dao.details(detail.work.id)!! }),
+            )
             instrumentation.runOnMainSync { controller.pause() }
         } finally {
             instrumentation.runOnMainSync { MediaController.releaseFuture(future) }

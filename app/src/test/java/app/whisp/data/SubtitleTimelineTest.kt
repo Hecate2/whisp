@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
-import android.app.Application
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
 class SubtitleTimelineTest {
     @Test
     fun subripKeepsMillisecondsMultilineAndSeekBoundaries() {

@@ -206,7 +206,7 @@ class PlaybackIntegrationTest {
             )
         }
         Thread.sleep(1000)
-        runBlocking { repo.downloadWork(detail.work.id) }
+        runBlocking { repo.offlineStore.downloadWork(detail.work.id) }
         waitFor(90000) {
             repo.downloads.value[detail.tracks.single().id]?.state ==
                 androidx.media3.exoplayer.offline.Download.STATE_COMPLETED

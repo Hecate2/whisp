@@ -4,7 +4,6 @@ package app.whisp.data
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
 import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -27,9 +26,8 @@ class WebDavClientTest {
     }
 
     @Test
-    fun usesDepthOneAndUtf8Credentials() {
-        MockWebServer().use { server ->
-            server.start()
+    fun usesDepthOneAndUtf8Credentials() = runBlocking {
+        withMockServer { server ->
             server.enqueue(
                 MockResponse.Builder()
                     .code(207)
@@ -70,8 +68,7 @@ class WebDavClientTest {
 
     @Test
     fun cancellingScanStopsTheDirectoryRequestBeforeItsBodyArrives() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 MockResponse.Builder()
                     .code(207)

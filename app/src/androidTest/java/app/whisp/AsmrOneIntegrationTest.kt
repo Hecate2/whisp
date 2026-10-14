@@ -452,7 +452,7 @@ class AsmrOneIntegrationTest {
                             )
                             .isEmpty(),
                     )
-                    repo.downloadWork(workId)
+                    repo.offlineStore.downloadWork(workId)
                 }
                 waitFor {
                     detail.tracks.all {

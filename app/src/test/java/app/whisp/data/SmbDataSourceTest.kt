@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
-import android.app.Application
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceException
@@ -11,11 +10,9 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
 class SmbDataSourceTest {
     private class Handle(override val length: Long) : RemoteReadHandle {
         val offsets = mutableListOf<Long>()

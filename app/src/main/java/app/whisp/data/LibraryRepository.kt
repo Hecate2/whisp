@@ -20,7 +20,6 @@ import androidx.media3.exoplayer.scheduler.Requirements
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.work.*
-import app.whisp.playback.OfflineService
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -55,6 +54,20 @@ class LibraryRepository(val context: Context) {
     val database = Room.databaseBuilder(context, LibraryDatabase::class.java, "library.db").build()
     val dao = database.library()
     val secrets = SecretStore()
+    private val secretCache =
+        object : LinkedHashMap<String, String>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, String>): Boolean = size > 32
+        }
+
+    // Keystore decryption runs on every media open and HTTP request; the key
+    // carries the ciphertext so a password change never reads stale.
+    private fun sourceSecret(source: SourceEntity): String =
+        synchronized(secretCache) {
+            secretCache.getOrPut(source.id + "|" + source.secret) {
+                secrets.decrypt(source.secret)
+            }
+        }
+
     // Redirects are disabled so credentials never travel to a different server.
     val http =
         OkHttpClient.Builder()
@@ -65,7 +78,7 @@ class LibraryRepository(val context: Context) {
             .build()
     val dav = WebDavClient(http)
     private val onlineHttp = http.newBuilder().followRedirects(true).build()
-    private val onlineWorkChanges = Mutex()
+    internal val onlineWorkChanges = Mutex()
     val dlsite = DlsiteClient(onlineHttp)
     val dlsiteDiagnostics = DlsiteDiagnostics(context)
     private val dlsiteClients =
@@ -78,16 +91,16 @@ class LibraryRepository(val context: Context) {
                 return@withLock it
             }
             val source = dao.source(sourceId) ?: throw IOException("来源已移除")
-            require(source.kind == "dlsite") { "来源类型不匹配" }
+            require(source.kindType == SourceKind.DLSITE) { "来源类型不匹配" }
             if (source.secret.isBlank()) throw DlsiteLoginRequired()
             lateinit var session: DlsiteSession
             session =
-                DlsiteSession(secrets.decrypt(source.secret)) {
+                DlsiteSession(sourceSecret(source)) {
                     scope.launch {
                         dlsiteCookieWrites.withLock {
                             dao.source(sourceId)
                                 ?.takeIf {
-                                    it.kind == "dlsite" &&
+                                    it.kindType == SourceKind.DLSITE &&
                                         dlsiteClients[sourceId]?.session === session
                                 }
                                 ?.let {
@@ -112,13 +125,13 @@ class LibraryRepository(val context: Context) {
                 it.session.clear()
                 it.http.dispatcher.cancelAll()
             }
-            val number = dao.sources().count { it.kind == "dlsite" }
+            val number = dao.sources().count { it.kindType == SourceKind.DLSITE }
             dao.putSource(
                 (previous
                         ?: SourceEntity(
                             id,
                             if (number == 0) "DLsite" else "DLsite ${number + 1}",
-                            "dlsite",
+                            SourceKind.DLSITE.raw,
                             "https://play.dlsite.com/",
                         ))
                     .copy(
@@ -282,7 +295,7 @@ class LibraryRepository(val context: Context) {
                     }
                 var obsoleteTracks = emptyList<String>()
                 database.withTransaction {
-                    require(dao.source(sourceId)?.kind == "dlsite") { "来源已移除" }
+                    require(dao.source(sourceId)?.kindType == SourceKind.DLSITE) { "来源已移除" }
                     val old = dao.details(workId)
                     val base = indexed.works.single()
                     val fresh =
@@ -364,7 +377,7 @@ class LibraryRepository(val context: Context) {
                     val pinnedAttachments =
                         old?.attachments
                             .orEmpty()
-                            .filter { File(offlineDir, it.id).isFile }
+                            .filter { offlineFile(it.id) != null }
                             .map { it.id }
                     dao.deleteStaleAttachments(
                         workId,
@@ -401,7 +414,7 @@ class LibraryRepository(val context: Context) {
     }
 
     private fun asmrClient(source: SourceEntity): AsmrOneClient {
-        require(source.kind == "asmrone") { "来源类型不匹配" }
+        require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
         return AsmrOneClient(onlineHttp, source.root.toHttpUrlOrNull() ?: error("来源地址无效"))
     }
 
@@ -425,7 +438,7 @@ class LibraryRepository(val context: Context) {
     val progress = dao.observeProgress().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val storageChanges = MutableStateFlow(0L)
 
-    private fun storageChanged() {
+    internal fun storageChanged() {
         storageChanges.update { it + 1 }
     }
 
@@ -448,6 +461,42 @@ class LibraryRepository(val context: Context) {
 
     suspend fun flushPlaybackProgress() {
         progressWriter.flush()
+    }
+
+    // UI-facing reads and writes; screens go through these instead of the DAO.
+    suspend fun track(id: String): TrackEntity? = dao.track(id)
+
+    suspend fun workDetails(id: String): WorkDetails? = dao.details(id)
+
+    suspend fun progress(workId: String): ProgressEntity? = dao.progress(workId)
+
+    suspend fun latestProgress(): ProgressEntity? = dao.latestProgress()
+
+    suspend fun latestDetails(): WorkDetails? {
+        val progress = dao.latestProgress() ?: return null
+        return dao.details(progress.workId)
+    }
+
+    suspend fun source(id: String): SourceEntity? = dao.source(id)
+
+    suspend fun sourceWorkIds(id: String): List<String> = dao.sourceWorkIds(id)
+
+    suspend fun sourceWorkTrackIds(sourceId: String): Set<String> =
+        dao.sourceWorkIds(sourceId)
+            .flatMap { dao.details(it)?.tracks.orEmpty() }
+            .map { it.id }
+            .toSet()
+
+    suspend fun toggleFavorite(id: String) {
+        dao.toggleFavorite(id)
+    }
+
+    suspend fun saveBookmark(bookmark: BookmarkEntity) {
+        dao.saveBookmark(bookmark)
+    }
+
+    suspend fun deleteBookmark(id: String) {
+        dao.deleteBookmark(id)
     }
 
     val bookmarks = dao.observeBookmarks().stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -476,16 +525,18 @@ class LibraryRepository(val context: Context) {
             )
         }
     val settings = settingsUpdates.stateIn(scope, SharingStarted.Eagerly, Settings())
-    private val offlineDir = File(context.filesDir, "offline/attachments").apply { mkdirs() }
-    private val artworkDir = File(context.filesDir, "artwork").apply { mkdirs() }
-    private val customArtworkDir = File(context.filesDir, "custom-artwork").apply { mkdirs() }
+    internal val offlineDir = File(context.filesDir, "offline/attachments").apply { mkdirs() }
+
+    internal fun offlineFile(id: String): File? = File(offlineDir, id).takeIf { it.isFile }
+
+    internal val artworkDir = File(context.filesDir, "artwork").apply { mkdirs() }
+    internal val customArtworkDir = File(context.filesDir, "custom-artwork").apply { mkdirs() }
     private val artworkCache =
         ImageFileCache(File(context.cacheDir, "artwork"), 64 * MIB, ::storageChanged)
     private val previewCache =
         ImageFileCache(File(context.cacheDir, "previews"), 24 * MIB, ::storageChanged)
     private val imageWrites = Mutex()
-    private val imageLanes = Semaphore(4)
-    private val imageRequests = mutableMapOf<String, Deferred<File?>>()
+    private val imageFlights = Singleflight<String, File?>(scope, 4)
     private val storageReady = CompletableDeferred<Unit>()
     val artworkReload = MutableStateFlow(0)
     private val streamingEvictor = AdjustableCacheEvictor(Long.MAX_VALUE, ::storageChanged)
@@ -516,7 +567,7 @@ class LibraryRepository(val context: Context) {
                     val location =
                         runBlocking(Dispatchers.IO) {
                             val source = dao.source(sourceId) ?: throw IOException("来源已移除")
-                            require(source.kind == "asmrone") { "来源类型不匹配" }
+                            require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
                             dao.locations(asset).firstOrNull { it.sourceId == sourceId }
                                 ?: throw IOException("文件已移除")
                         }
@@ -529,8 +580,8 @@ class LibraryRepository(val context: Context) {
                 val source =
                     runBlocking(Dispatchers.IO) { dao.source(sourceId) }
                         ?: throw IOException("来源已移除")
-                require(source.kind == "smb") { "来源类型不匹配" }
-                smb.open(source, secrets.decrypt(source.secret), uri)
+                require(source.kindType == SourceKind.SMB) { "来源类型不匹配" }
+                smb.open(source, sourceSecret(source), uri)
             }
         val nfsData =
             RemoteFileDataSource("NFS") { uri ->
@@ -538,7 +589,7 @@ class LibraryRepository(val context: Context) {
                 val source =
                     runBlocking(Dispatchers.IO) { dao.source(sourceId) }
                         ?: throw IOException("来源已移除")
-                require(source.kind == "nfs") { "来源类型不匹配" }
+                require(source.kindType == SourceKind.NFS) { "来源类型不匹配" }
                 nfs.open(source, uri)
             }
         val dlsiteData =
@@ -548,7 +599,7 @@ class LibraryRepository(val context: Context) {
                         val current = dlsiteClients[sourceId]
                         val source = dao.source(sourceId)
                         if (
-                            source?.kind == "dlsite" &&
+                            source?.kindType == SourceKind.DLSITE &&
                                 (client != null && current === client ||
                                     client == null && current == null && source.secret.isBlank())
                         ) {
@@ -748,7 +799,7 @@ class LibraryRepository(val context: Context) {
         val knownSources = sources.value.ifEmpty { runBlocking(Dispatchers.IO) { dao.sources() } }
         val source =
             knownSources.firstOrNull { source ->
-                source.kind == "webdav" &&
+                source.kindType == SourceKind.WEBDAV &&
                     (source.root.trimEnd('/') + "/").toHttpUrlOrNull()?.let {
                         WebDavClient.insideRoot(url, it)
                     } == true
@@ -756,7 +807,7 @@ class LibraryRepository(val context: Context) {
         if (source.username.isBlank()) return emptyMap()
         return mapOf(
             "Authorization" to
-                Credentials.basic(source.username, secrets.decrypt(source.secret), Charsets.UTF_8),
+                Credentials.basic(source.username, sourceSecret(source), Charsets.UTF_8),
         )
     }
 
@@ -785,7 +836,7 @@ class LibraryRepository(val context: Context) {
 
     suspend fun addLocal(root: String, name: String): String {
         val id = stableId(root)
-        dao.putSource(SourceEntity(id, name, "local", root))
+        dao.putSource(SourceEntity(id, name, SourceKind.LOCAL.raw, root))
         scheduleScan(id)
         return id
     }
@@ -813,7 +864,7 @@ class LibraryRepository(val context: Context) {
             SourceEntity(
                 id,
                 name.ifBlank { url.host },
-                "webdav",
+                SourceKind.WEBDAV.raw,
                 normalized,
                 username.trim(),
                 secrets.encrypt(password),
@@ -833,7 +884,7 @@ class LibraryRepository(val context: Context) {
             SourceEntity(
                 id,
                 name.ifBlank { address.host },
-                "smb",
+                SourceKind.SMB.raw,
                 address.normalized,
                 account,
                 secrets.encrypt(password),
@@ -847,7 +898,9 @@ class LibraryRepository(val context: Context) {
     suspend fun addAsmrOne(): String {
         val id = stableId("asmr.one")
         if (dao.source(id) == null)
-            dao.putSource(SourceEntity(id, "ASMR.ONE", "asmrone", AsmrOneClient.API_ROOT))
+            dao.putSource(
+                SourceEntity(id, "ASMR.ONE", SourceKind.ASMRONE.raw, AsmrOneClient.API_ROOT),
+            )
         return id
     }
 
@@ -860,7 +913,8 @@ class LibraryRepository(val context: Context) {
     ): String {
         val address = NfsAddress.parse(root, version, uid, gid)
         val id = stableId("nfs|${address.normalized}")
-        val source = SourceEntity(id, name.ifBlank { address.host }, "nfs", address.normalized)
+        val source =
+            SourceEntity(id, name.ifBlank { address.host }, SourceKind.NFS.raw, address.normalized)
         withContext(Dispatchers.IO) { nfs.check(source) }
         dao.putSource(source)
         scheduleScan(id)
@@ -960,7 +1014,7 @@ class LibraryRepository(val context: Context) {
                 val source = dao.source(sourceId) ?: error("来源已移除")
                 if (existingOnly && dao.work(stableId("asmr.one|work|$id")) == null)
                     return@withLock stableId("asmr.one|work|$id")
-                require(source.kind == "asmrone") { "来源类型不匹配" }
+                require(source.kindType == SourceKind.ASMRONE) { "来源类型不匹配" }
                 commitAsmrPreview(previewAsmrWork(sourceId, id, metadataClient))
             }
         }
@@ -1030,7 +1084,7 @@ class LibraryRepository(val context: Context) {
             obsoleteTracks =
                 (oldTracks.keys - (indexed.tracks.map { it.id } + pinned).toSet()).toList()
             val pinnedAttachments =
-                old?.attachments.orEmpty().filter { File(offlineDir, it.id).isFile }.map { it.id }
+                old?.attachments.orEmpty().filter { offlineFile(it.id) != null }.map { it.id }
             dao.deleteStaleAttachments(
                 work.workId,
                 indexed.attachments.map { it.id } + pinnedAttachments,
@@ -1057,14 +1111,14 @@ class LibraryRepository(val context: Context) {
     private fun removeObsoleteDownloads(ids: List<String>) {
         for (id in ids) {
             if (downloadManager.downloadIndex.getDownload(id) != null)
-                DownloadService.sendRemoveDownload(context, OfflineService::class.java, id, false)
+                offlineStore.removeTrackDownload(id)
             streamingCache.removeResource(id)
         }
     }
 
     private fun offlineFilesPresent(work: WorkEntity, attachments: List<AttachmentEntity>) =
-        attachments.all { File(offlineDir, it.id).isFile } &&
-            (work.coverId == null || File(offlineDir, work.coverId).isFile)
+        attachments.all { offlineFile(it.id) != null } &&
+            (work.coverId == null || offlineFile(work.coverId) != null)
 
     suspend fun updateDlsiteMetadata(id: String, client: DlsiteClient = dlsite) =
         withContext(Dispatchers.IO) {
@@ -1140,7 +1194,7 @@ class LibraryRepository(val context: Context) {
         }
 
     suspend fun ensureDlsiteImage(id: String, url: String): File? =
-        imageRequest(id) {
+        imageFlights.run(id) {
             artworkCache.get(id)
                 ?: cacheArtwork(
                         id,
@@ -1178,24 +1232,13 @@ class LibraryRepository(val context: Context) {
                     dao.deleteWorkBookmarks(id)
                     dao.deleteWork(id)
                 }
-                val requests =
-                    synchronized(imageRequests) {
-                        assets.flatMap { asset ->
-                            listOfNotNull(
-                                imageRequests["cover:$asset"],
-                                imageRequests["preview:$asset"],
-                            )
-                        }
-                    }
-                requests.forEach { it.cancelAndJoin() }
-                detail.tracks.forEach { track ->
-                    DownloadService.sendRemoveDownload(
-                        context,
-                        OfflineService::class.java,
-                        track.id,
-                        false,
-                    )
-                    streamingCache.removeResource(track.id)
+                assets.forEach { asset ->
+                    imageFlights.cancelAndJoin("cover:$asset")
+                    imageFlights.cancelAndJoin("preview:$asset")
+                }
+                detail.tracks.forEach {
+                    offlineStore.removeTrackDownload(it.id)
+                    streamingCache.removeResource(it.id)
                 }
                 imageWrites.withLock {
                     assets.forEach { asset ->
@@ -1215,13 +1258,13 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun ensureCatalogArtwork(id: String, url: String, sourceId: String): File? =
-        imageRequest("cover:$id") {
+        imageFlights.run("cover:$id") {
             storageReady.await()
             val source = dao.source(sourceId) ?: error("来源已移除")
             artwork(id)
                 ?: cacheArtwork(
                         id,
-                        if (source.kind == "dlsite")
+                        if (source.kindType == SourceKind.DLSITE)
                             onlineHttp.onlineBytes(
                                 okhttp3.Request.Builder()
                                     .url(url)
@@ -1259,13 +1302,13 @@ class LibraryRepository(val context: Context) {
         val startTime = android.os.SystemClock.elapsedRealtime()
         try {
             Log.i("WhispScan", "Started ${source.kind} scan")
-            if (source.kind == "dlsite") {
+            if (source.kindType == SourceKind.DLSITE) {
                 val client = dlsiteAccount(source.id)
                 dlsiteClient = client
                 syncDlsitePurchases(source.id, false, client)
                 return
             }
-            if (source.kind == "asmrone") {
+            if (source.kindType == SourceKind.ASMRONE) {
                 for (workId in dao.sourceWorkIds(source.id)) {
                     currentCoroutineContext().ensureActive()
                     val id = dao.work(workId)?.rj?.removePrefix("RJ")?.toLongOrNull() ?: continue
@@ -1279,11 +1322,11 @@ class LibraryRepository(val context: Context) {
                 return
             }
             val entries =
-                when (source.kind) {
-                    "local" -> LocalDirectory(context).walk(source.root)
-                    "smb" -> smb.walk(source, secrets.decrypt(source.secret))
-                    "nfs" -> nfs.walk(source)
-                    "webdav" -> dav.walk(source, secrets.decrypt(source.secret))
+                when (source.kindType) {
+                    SourceKind.LOCAL -> LocalDirectory(context).walk(source.root)
+                    SourceKind.SMB -> smb.walk(source, sourceSecret(source))
+                    SourceKind.NFS -> nfs.walk(source)
+                    SourceKind.WEBDAV -> dav.walk(source, sourceSecret(source))
                     else -> error("不支持的来源类型")
                 }
             val generation = System.currentTimeMillis()
@@ -1337,7 +1380,7 @@ class LibraryRepository(val context: Context) {
                                             old.coverUrl != null ||
                                                 cover == stableId("${old.id}|custom-cover") ||
                                                 cover in indexedAttachments ||
-                                                File(offlineDir, cover).isFile
+                                                offlineFile(cover) != null
                                         } ?: new.coverId,
                                     coverUrl = old.coverUrl,
                                     originalArtist = old.originalArtist,
@@ -1372,7 +1415,7 @@ class LibraryRepository(val context: Context) {
                         .flatMap { dao.unlocatedTracks(it) }
                         .filter {
                             downloadManager.downloadIndex.getDownload(it.id)?.state !=
-                                Download.STATE_COMPLETED && !File(offlineDir, it.id).isFile
+                                Download.STATE_COMPLETED && offlineFile(it.id) == null
                         }
                         .map { it.id }
                 obsoleteTracks.chunked(500).forEach { dao.deleteTracks(it) }
@@ -1380,7 +1423,7 @@ class LibraryRepository(val context: Context) {
                     changedWorks
                         .chunked(500)
                         .flatMap { dao.unlocatedAttachments(it) }
-                        .filter { !File(offlineDir, it.id).isFile }
+                        .filter { offlineFile(it.id) == null }
                         .map { it.id }
                 obsoleteAttachments.chunked(500).forEach { dao.deleteAttachments(it) }
                 dao.putSource(latestSource.copy(lastScan = generation, error = null))
@@ -1416,7 +1459,7 @@ class LibraryRepository(val context: Context) {
                     }
                 }
             }
-            if (source.kind == "dlsite") {
+            if (source.kindType == SourceKind.DLSITE) {
                 dlsiteCookieWrites.withLock {
                     dlsiteClient?.let { requireDlsiteClient(id, it) }
                     reportError()
@@ -1448,13 +1491,13 @@ class LibraryRepository(val context: Context) {
                 .orEmpty()
                 .filter {
                     it.durationMs == 0L &&
-                        (source.kind == "local" || it.fileName.endsWith(".mp3", true))
+                        (source.kindType == SourceKind.LOCAL || it.fileName.endsWith(".mp3", true))
                 }
                 .forEach { tasks += Asset(it.id, false) }
         }
         if (tasks.isEmpty()) return@coroutineScope
         val locations = indexed.locations.associateBy { it.assetId }
-        val password = if (source.kind != "local") secrets.decrypt(source.secret) else ""
+        val password = if (source.kindType != SourceKind.LOCAL) sourceSecret(source) else ""
         val lanes = minOf(4, tasks.size)
         val processed = java.util.concurrent.atomic.AtomicInteger()
         val skipped = java.util.concurrent.atomic.AtomicInteger()
@@ -1471,8 +1514,9 @@ class LibraryRepository(val context: Context) {
                         durations.clear()
                     }
                     try {
-                        if (source.kind == "smb") session = smb.assets(source, password)
-                        if (source.kind == "nfs") session = nfs.assets(source)
+                        if (source.kindType == SourceKind.SMB)
+                            session = smb.assets(source, password)
+                        if (source.kindType == SourceKind.NFS) session = nfs.assets(source)
                         tasks
                             .filterIndexed { index, _ -> index % lanes == lane }
                             .forEachIndexed { index, asset ->
@@ -1493,10 +1537,10 @@ class LibraryRepository(val context: Context) {
                                     } else {
                                         val location = locations.getValue(asset.id)
                                         val duration =
-                                            when (source.kind) {
-                                                "smb",
-                                                "nfs" -> session!!.duration(location.uri)
-                                                "local" -> localDuration(asset.id)
+                                            when (source.kindType) {
+                                                SourceKind.SMB,
+                                                SourceKind.NFS -> session!!.duration(location.uri)
+                                                SourceKind.LOCAL -> localDuration(asset.id)
                                                 else ->
                                                     Mp3Metadata.duration(location.size) {
                                                         offset,
@@ -1547,7 +1591,7 @@ class LibraryRepository(val context: Context) {
 
     suspend fun removeSource(id: String) {
         WorkManager.getInstance(context).cancelUniqueWork("scan-$id")
-        if (dao.source(id)?.kind == "dlsite") {
+        if (dao.source(id)?.kindType == SourceKind.DLSITE) {
             for (workId in dao.sourceWorkIds(id)) {
                 WorkManager.getInstance(context).cancelUniqueWork("attachments-$workId")
                 dao.details(workId)
@@ -1559,12 +1603,7 @@ class LibraryRepository(val context: Context) {
                             Download.STATE_COMPLETED
                     }
                     .forEach {
-                        DownloadService.sendRemoveDownload(
-                            context,
-                            OfflineService::class.java,
-                            it.id,
-                            false,
-                        )
+                        offlineStore.removeTrackDownload(it.id)
                     }
             }
         }
@@ -1581,8 +1620,9 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun resolve(id: String): String {
-        val offline = File(offlineDir, id)
-        if (offline.isFile) return Uri.fromFile(offline).toString()
+        offlineFile(id)?.let {
+            return Uri.fromFile(it).toString()
+        }
         downloadManager.downloadIndex
             .getDownload(id)
             ?.takeIf { it.state == Download.STATE_COMPLETED }
@@ -1594,9 +1634,9 @@ class LibraryRepository(val context: Context) {
             options.firstOrNull { it.uri.startsWith("content:") || it.uri.startsWith("file:") }
                 ?: options.firstOrNull()
                 ?: return dao.workByCover(id)?.coverUrl ?: throw IOException("文件已移动或来源已移除")
-        return when (dao.source(location.sourceId)?.kind) {
-            "asmrone" -> "whisp-asmr://${location.sourceId}/$id"
-            "dlsite" -> "whisp-dlsite://${location.sourceId}/$id"
+        return when (dao.source(location.sourceId)?.kindType) {
+            SourceKind.ASMRONE -> "whisp-asmr://${location.sourceId}/$id"
+            SourceKind.DLSITE -> "whisp-dlsite://${location.sourceId}/$id"
             else -> location.uri
         }
     }
@@ -1607,14 +1647,14 @@ class LibraryRepository(val context: Context) {
                 tracks.map { it.id }.chunked(500).flatMap { dao.locatedAssets(it) }.toSet()
             tracks.filter {
                 it.id in located ||
-                    File(offlineDir, it.id).isFile ||
+                    offlineFile(it.id) != null ||
                     downloadManager.downloadIndex.getDownload(it.id)?.state ==
                         Download.STATE_COMPLETED
             }
         }
 
     fun artwork(id: String?): File? = id?.let { asset ->
-        File(offlineDir, asset).takeIf { it.isFile }
+        offlineFile(asset)
             ?: File(customArtworkDir, asset).takeIf { it.isFile }
             ?: artworkCache.get(asset)
             ?: File(artworkDir, asset).takeIf { it.isFile }
@@ -1626,7 +1666,7 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun ensureArtwork(id: String): File? =
-        imageRequest("cover:$id") {
+        imageFlights.run("cover:$id") {
             storageReady.await()
             artwork(id)
                 ?: if (dao.locations(id).isEmpty() && dao.workByCover(id)?.coverUrl == null) null
@@ -1638,38 +1678,15 @@ class LibraryRepository(val context: Context) {
         }
 
     suspend fun previewImage(id: String): File =
-        imageRequest("preview:$id") {
+        imageFlights.run("preview:$id") {
             storageReady.await()
-            File(offlineDir, id).takeIf { it.isFile }
+            offlineFile(id)
                 ?: previewCache.get(id)
                 ?: run {
                     val bytes = ImageOptimizer.optimize(readAsset(id, 64 * 1024 * 1024), 2560)
                     imageWrites.withLock { previewCache.put(id, bytes) }
                 }
         } ?: throw IOException("图片不可读")
-
-    private suspend fun imageRequest(key: String, block: suspend () -> File?): File? {
-        val request =
-            synchronized(imageRequests) {
-                imageRequests[key]
-                    ?: scope
-                        .async(start = CoroutineStart.LAZY) { imageLanes.withPermit { block() } }
-                        .also { task ->
-                            imageRequests[key] = task
-                            // A screen can disappear before the shared fetch completes. Cleanup
-                            // belongs
-                            // to the fetch itself, otherwise a later request can reuse a deleted
-                            // file.
-                            task.invokeOnCompletion {
-                                synchronized(imageRequests) {
-                                    if (imageRequests[key] === task) imageRequests.remove(key)
-                                }
-                            }
-                            task.start()
-                        }
-            }
-        return request.await()
-    }
 
     /** Only indexed remote originals move to cache; custom and offline files remain durable. */
     internal suspend fun migrateImages() =
@@ -1724,16 +1741,7 @@ class LibraryRepository(val context: Context) {
     suspend fun clearTemporaryCache() =
         withContext(Dispatchers.IO) {
             storageReady.await()
-            // Let already requested images finish before clearing so they cannot restore stale
-            // cache.
-            val requests = synchronized(imageRequests) { imageRequests.values.toList() }
-            requests.forEach {
-                try {
-                    it.await()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {}
-            }
+            imageFlights.joinAll()
             imageWrites.withLock {
                 artworkCache.clear()
                 previewCache.clear()
@@ -1747,9 +1755,9 @@ class LibraryRepository(val context: Context) {
 
     suspend fun readAsset(id: String, limit: Int = 8 * 1024 * 1024): ByteArray =
         withContext(Dispatchers.IO) {
-            val offline = File(offlineDir, id)
-            if (offline.isFile)
-                return@withContext offline.inputStream().use { boundedRead(it, limit) }
+            offlineFile(id)?.let {
+                return@withContext it.inputStream().use { stream -> boundedRead(stream, limit) }
+            }
             dao.workByCover(id)?.coverUrl?.let { url ->
                 return@withContext onlineHttp.onlineBytes(
                     okhttp3.Request.Builder()
@@ -1780,12 +1788,11 @@ class LibraryRepository(val context: Context) {
                     val location =
                         dao.locations(id).firstOrNull { it.uri == uri.toString() } ?: error("来源未关联")
                     val source = dao.source(location.sourceId) ?: error("来源已移除")
-                    when (source.kind) {
-                        "smb" ->
-                            smb.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
-                        "nfs" -> nfs.bytes(source, uri.toString(), limit)
-                        else ->
-                            dav.bytes(uri.toString(), source, secrets.decrypt(source.secret), limit)
+                    when (source.kindType) {
+                        SourceKind.SMB ->
+                            smb.bytes(uri.toString(), source, sourceSecret(source), limit)
+                        SourceKind.NFS -> nfs.bytes(source, uri.toString(), limit)
+                        else -> dav.bytes(uri.toString(), source, sourceSecret(source), limit)
                     }
                 }
             }
@@ -1837,94 +1844,11 @@ class LibraryRepository(val context: Context) {
             .build()
     }
 
-    suspend fun downloadWork(id: String) = onlineWorkChanges.withLock {
-        val detail = dao.details(id) ?: return@withLock
-        require(detail.tracks.isNotEmpty()) { "作品没有音轨" }
-        for (track in detail.tracks) {
-            val uri = resolve(track.id)
-            val request =
-                DownloadRequest.Builder(track.id, uri.toUri())
-                    .setMimeType(MediaFormats.videoMimeType(track.fileName))
-                    .setCustomCacheKey(track.id)
-                    .build()
-            DownloadService.sendAddDownload(context, OfflineService::class.java, request, false)
-        }
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(
-                "attachments-$id",
-                ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<AttachmentsWorker>()
-                    .setInputData(workDataOf("workId" to id))
-                    .build(),
-            )
-    }
-
-    suspend fun downloadAttachments(id: String) = onlineWorkChanges.withLock {
-        val detail = dao.details(id) ?: return@withLock
-        detail.attachments.forEach { attachment ->
-            val file = File(offlineDir, attachment.id)
-            if (!file.isFile) atomicFile(file, readAsset(attachment.id, 64 * 1024 * 1024))
-        }
-        detail.work.coverId?.let { cover ->
-            val target = File(offlineDir, cover)
-            if (!target.isFile) {
-                val custom =
-                    File(customArtworkDir, cover).takeIf { it.isFile }
-                        ?: File(artworkDir, cover).takeIf {
-                            cover == stableId("${detail.work.id}|custom-cover") && it.isFile
-                        }
-                atomicFile(target, custom?.readBytes() ?: readAsset(cover, 16 * 1024 * 1024))
-            }
-        }
-        dao.attachmentsReady(id, true)
-        storageChanged()
-    }
-
-    suspend fun setCover(work: WorkEntity, uri: Uri) =
-        withContext(Dispatchers.IO) {
-            onlineWorkChanges.withLock {
-                val latest = dao.work(work.id) ?: throw IOException("作品已删除")
-                val id = stableId("${work.id}|custom-cover")
-                val bytes =
-                    context.contentResolver.openInputStream(uri)?.use {
-                        boundedRead(it, 16 * 1024 * 1024)
-                    } ?: error("无法读取图片")
-                atomicFile(File(customArtworkDir, id), bytes)
-                if (latest.offlineAttachments) atomicFile(File(offlineDir, id), bytes)
-                dao.updateWorkCover(work.id, id)
-                artworkRevision.update { it + 1 }
-                storageChanged()
-            }
-        }
+    internal val offlineStore: OfflineStore by lazy { OfflineStore(this) }
 
     suspend fun editWorkIdentity(id: String, title: String, artist: String) {
         dao.updateWorkIdentity(id, title, artist)
     }
-
-    suspend fun removeOffline(id: String) {
-        WorkManager.getInstance(context).cancelUniqueWork("attachments-$id")
-        onlineWorkChanges.withLock {
-            val detail = dao.details(id) ?: return@withLock
-            detail.tracks.forEach { track ->
-                DownloadService.sendRemoveDownload(
-                    context,
-                    OfflineService::class.java,
-                    track.id,
-                    false,
-                )
-            }
-            detail.attachments.forEach { File(offlineDir, it.id).delete() }
-            detail.work.coverId?.let {
-                if (!dao.otherOfflineCover(it, id)) File(offlineDir, it).delete()
-            }
-            dao.attachmentsReady(id, false)
-            storageChanged()
-        }
-    }
-
-    fun isOffline(detail: WorkDetails): Boolean =
-        detail.work.offlineAttachments &&
-            detail.tracks.all { downloads.value[it.id]?.state == Download.STATE_COMPLETED }
 }
 
 fun boundedRead(stream: java.io.InputStream, limit: Int): ByteArray {
@@ -1937,19 +1861,4 @@ fun boundedRead(stream: java.io.InputStream, limit: Int): ByteArray {
         require(output.size() <= limit) { "文件过大" }
     }
     return output.toByteArray()
-}
-
-class AttachmentsWorker(context: Context, params: WorkerParameters) :
-    CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result {
-        val id = inputData.getString("workId") ?: return Result.failure()
-        return try {
-            (applicationContext as app.whisp.WhispApp).repository.downloadAttachments(id)
-            Result.success()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
-        }
-    }
 }

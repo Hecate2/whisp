@@ -28,6 +28,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadService
 import app.whisp.DlsiteLoginActivity
+import app.whisp.data.SourceKind
+import app.whisp.data.kindType
 import app.whisp.playback.OfflineService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -90,9 +92,9 @@ internal fun SourcesPage(
                 Modifier.fillMaxWidth()
                     .background(Surface, RoundedCornerShape(18.dp))
                     .clickable {
-                        when (source.kind) {
-                            "asmrone" -> online(source.id)
-                            "dlsite" -> dlsite(source.id)
+                        when (source.kindType) {
+                            SourceKind.ASMRONE -> online(source.id)
+                            SourceKind.DLSITE -> dlsite(source.id)
                             else -> selectedId = source.id
                         }
                     }
@@ -100,7 +102,7 @@ internal fun SourcesPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    if (source.kind == "local") Icons.Outlined.FolderOpen
+                    if (source.kindType == SourceKind.LOCAL) Icons.Outlined.FolderOpen
                     else Icons.Outlined.CloudQueue,
                     null,
                     tint = Rose,
@@ -109,13 +111,13 @@ internal fun SourcesPage(
                     Text(source.name, fontSize = 17.sp)
                     if (source.id in busy)
                         Text(
-                            if (source.kind == "dlsite") "同步中" else "扫描中",
+                            if (source.kindType == SourceKind.DLSITE) "同步中" else "扫描中",
                             color = Muted,
                             fontSize = 13.sp,
                         )
                     else if (source.error != null)
                         Text(
-                            if (source.kind == "dlsite") "同步失败" else "扫描失败",
+                            if (source.kindType == SourceKind.DLSITE) "同步失败" else "扫描失败",
                             color = Rose,
                             fontSize = 13.sp,
                         )
@@ -125,7 +127,7 @@ internal fun SourcesPage(
                         Modifier.size(22.dp).padding(3.dp),
                         strokeWidth = 2.dp,
                     )
-                else if (source.kind in setOf("asmrone", "dlsite"))
+                else if (source.kindType in setOf(SourceKind.ASMRONE, SourceKind.DLSITE))
                     IconAction(Icons.Outlined.MoreVert, "管理${source.name}", Muted) {
                         selectedId = source.id
                     }
@@ -171,7 +173,7 @@ internal fun SourcesPage(
             }
         items(offlineWorks, key = { it.work.id }) { detail ->
             val states = detail.tracks.mapNotNull { downloads[it.id] }
-            val complete = model.repository.isOffline(detail)
+            val complete = model.repository.offlineStore.isOffline(detail)
             val failed = states.any { it.state == Download.STATE_FAILED }
             val percentage =
                 states.map { it.percentDownloaded.takeIf { value -> value >= 0 } ?: 0f }.sum() /
@@ -189,7 +191,9 @@ internal fun SourcesPage(
                         Muted,
                     ) {
                         if (complete)
-                            model.action { model.repository.removeOffline(detail.work.id) }
+                            model.action {
+                                model.repository.offlineStore.removeOffline(detail.work.id)
+                            }
                         else model.download(detail.work.id)
                     }
                 }
@@ -296,10 +300,10 @@ internal fun SourcesPage(
                 title = { Text(source.name) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (source.kind !in setOf("asmrone", "dlsite"))
+                        if (source.kindType !in setOf(SourceKind.ASMRONE, SourceKind.DLSITE))
                             Text(source.root, color = Muted, fontSize = 13.sp)
                         source.error?.let { Text(it, color = Rose) }
-                        if (source.kind == "asmrone")
+                        if (source.kindType == SourceKind.ASMRONE)
                             TextButton(
                                 onClick = {
                                     model.repository.scheduleScan(source.id)
@@ -308,7 +312,7 @@ internal fun SourcesPage(
                             ) {
                                 Text("更新已加入作品")
                             }
-                        if (source.kind == "dlsite") {
+                        if (source.kindType == SourceKind.DLSITE) {
                             TextButton(
                                 onClick = {
                                     selectedId = null
@@ -337,13 +341,17 @@ internal fun SourcesPage(
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            if (source.kind == "asmrone") online(source.id)
-                            else if (source.kind == "dlsite") dlsite(source.id)
+                            if (source.kindType == SourceKind.ASMRONE) online(source.id)
+                            else if (source.kindType == SourceKind.DLSITE) dlsite(source.id)
                             else model.repository.scheduleScan(source.id)
                             selectedId = null
                         },
                     ) {
-                        Text(if (source.kind in setOf("asmrone", "dlsite")) "浏览" else "刷新")
+                        Text(
+                            if (source.kindType in setOf(SourceKind.ASMRONE, SourceKind.DLSITE))
+                                "浏览"
+                            else "刷新",
+                        )
                     }
                 },
                 dismissButton = {
@@ -353,7 +361,7 @@ internal fun SourcesPage(
                             selectedId = null
                         },
                     ) {
-                        Text(if (source.kind == "dlsite") "退出账号" else "移除来源")
+                        Text(if (source.kindType == SourceKind.DLSITE) "退出账号" else "移除来源")
                     }
                 },
             )
