@@ -5,17 +5,18 @@ package app.whisp.playback
 internal data class FormatSnapshot(val mime: String?, val codecs: String?)
 
 /**
- * Pairs each decoder initialization with the input format event from the same
- * renderer call. Renderers initialize the codec before dispatching the format
- * event, so recording at init time would read a stale or missing format.
+ * Pairs each decoder initialization with the input format event from the same renderer call.
+ * Renderers initialize the codec before dispatching the format event, so recording at init time
+ * would read a stale or missing format.
  */
 internal class DecoderCorrelator(
-    private val sink: (
-        kind: String,
-        snapshot: FormatSnapshot?,
-        decoder: String?,
-        replaceProvisional: Boolean,
-    ) -> Unit,
+    private val sink:
+        (
+            kind: String,
+            snapshot: FormatSnapshot?,
+            decoder: String?,
+            replaceProvisional: Boolean,
+        ) -> Unit,
 ) {
     private val cached = mutableMapOf<String, FormatSnapshot?>()
     private val lastDecoder = mutableMapOf<String, String?>()

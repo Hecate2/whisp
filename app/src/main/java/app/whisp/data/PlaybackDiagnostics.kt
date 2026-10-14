@@ -15,25 +15,23 @@ class PlaybackDiagnostics(private val context: Context) {
     private val preferences =
         context.getSharedPreferences("playback-diagnostics", Context.MODE_PRIVATE)
 
-    private fun readEvents(): JsonArray =
-        runCatching {
-            Json.parseToJsonElement(preferences.getString("events", "[]")!!).jsonArray
-        }
-            .getOrDefault(JsonArray(emptyList()))
+    private fun readEvents(): JsonArray = runCatching {
+        Json.parseToJsonElement(preferences.getString("events", "[]")!!).jsonArray
+    }
+        .getOrDefault(JsonArray(emptyList()))
 
     private fun writeEvents(events: List<JsonElement>) {
         preferences.edit { putString("events", JsonArray(events).toString()) }
     }
 
-    private fun encode(event: DecoderEvent): JsonObject =
-        buildJsonObject {
-            put("kind", event.kind)
-            event.mime?.let { put("mime", it) }
-            event.codecs?.let { put("codecs", it) }
-            event.decoder?.let { put("decoder", it) }
-            event.hardwareAccelerated?.let { put("hardwareAccelerated", it) }
-            event.offloaded?.let { put("offloaded", it) }
-        }
+    private fun encode(event: DecoderEvent): JsonObject = buildJsonObject {
+        put("kind", event.kind)
+        event.mime?.let { put("mime", it) }
+        event.codecs?.let { put("codecs", it) }
+        event.decoder?.let { put("decoder", it) }
+        event.hardwareAccelerated?.let { put("hardwareAccelerated", it) }
+        event.offloaded?.let { put("offloaded", it) }
+    }
 
     @Synchronized
     fun record(event: DecoderEvent) {
@@ -45,9 +43,7 @@ class PlaybackDiagnostics(private val context: Context) {
         val previous = readEvents()
         val encoded = encode(event)
         writeEvents(
-            if (
-                previous.lastOrNull()?.jsonObject?.get("kind")?.jsonPrimitive?.content == kind
-            )
+            if (previous.lastOrNull()?.jsonObject?.get("kind")?.jsonPrimitive?.content == kind)
                 previous.dropLast(1) + encoded
             else previous.takeLast(63) + encoded,
         )

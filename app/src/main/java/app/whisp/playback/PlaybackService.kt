@@ -603,8 +603,7 @@ class PlaybackService : MediaLibraryService() {
                 .buildUpon()
                 .setAudioOffloadPreferences(
                     AudioOffload.preferences(
-                        enabled =
-                            !AudioOffload.needsPreciseDeadline(loopStart, loopEnd, timerEnd),
+                        enabled = !AudioOffload.needsPreciseDeadline(loopStart, loopEnd, timerEnd),
                     ),
                 )
                 .build()
@@ -620,8 +619,9 @@ class PlaybackService : MediaLibraryService() {
             decoderRecords.withLock {
                 val candidates = runCatching {
                     val mime = snapshot?.mime ?: return@runCatching emptyList<CodecCandidate>()
-                    MediaCodecUtil.getDecoderInfos(mime, false, false)
-                        .map { CodecCandidate(it.name, it.hardwareAccelerated) }
+                    MediaCodecUtil.getDecoderInfos(mime, false, false).map {
+                        CodecCandidate(it.name, it.hardwareAccelerated)
+                    }
                 }
                     .getOrDefault(emptyList())
                 val event =
