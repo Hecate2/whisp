@@ -56,8 +56,7 @@ class LibraryRepository(val context: Context) {
     val secrets = SecretStore()
     private val secretCache =
         object : LinkedHashMap<String, String>(32, 0.75f, true) {
-            override fun removeEldestEntry(eldest: Map.Entry<String, String>): Boolean =
-                size > 32
+            override fun removeEldestEntry(eldest: Map.Entry<String, String>): Boolean = size > 32
         }
 
     // Keystore decryption runs on every media open and HTTP request; the key
@@ -68,6 +67,7 @@ class LibraryRepository(val context: Context) {
                 secrets.decrypt(source.secret)
             }
         }
+
     // Redirects are disabled so credentials never travel to a different server.
     val http =
         OkHttpClient.Builder()
@@ -528,6 +528,7 @@ class LibraryRepository(val context: Context) {
     internal val offlineDir = File(context.filesDir, "offline/attachments").apply { mkdirs() }
 
     internal fun offlineFile(id: String): File? = File(offlineDir, id).takeIf { it.isFile }
+
     internal val artworkDir = File(context.filesDir, "artwork").apply { mkdirs() }
     internal val customArtworkDir = File(context.filesDir, "custom-artwork").apply { mkdirs() }
     private val artworkCache =
@@ -897,7 +898,9 @@ class LibraryRepository(val context: Context) {
     suspend fun addAsmrOne(): String {
         val id = stableId("asmr.one")
         if (dao.source(id) == null)
-            dao.putSource(SourceEntity(id, "ASMR.ONE", SourceKind.ASMRONE.raw, AsmrOneClient.API_ROOT))
+            dao.putSource(
+                SourceEntity(id, "ASMR.ONE", SourceKind.ASMRONE.raw, AsmrOneClient.API_ROOT),
+            )
         return id
     }
 
@@ -910,7 +913,8 @@ class LibraryRepository(val context: Context) {
     ): String {
         val address = NfsAddress.parse(root, version, uid, gid)
         val id = stableId("nfs|${address.normalized}")
-        val source = SourceEntity(id, name.ifBlank { address.host }, SourceKind.NFS.raw, address.normalized)
+        val source =
+            SourceEntity(id, name.ifBlank { address.host }, SourceKind.NFS.raw, address.normalized)
         withContext(Dispatchers.IO) { nfs.check(source) }
         dao.putSource(source)
         scheduleScan(id)
@@ -1510,7 +1514,8 @@ class LibraryRepository(val context: Context) {
                         durations.clear()
                     }
                     try {
-                        if (source.kindType == SourceKind.SMB) session = smb.assets(source, password)
+                        if (source.kindType == SourceKind.SMB)
+                            session = smb.assets(source, password)
                         if (source.kindType == SourceKind.NFS) session = nfs.assets(source)
                         tasks
                             .filterIndexed { index, _ -> index % lanes == lane }
@@ -1615,7 +1620,9 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun resolve(id: String): String {
-        offlineFile(id)?.let { return Uri.fromFile(it).toString() }
+        offlineFile(id)?.let {
+            return Uri.fromFile(it).toString()
+        }
         downloadManager.downloadIndex
             .getDownload(id)
             ?.takeIf { it.state == Download.STATE_COMPLETED }
@@ -1785,8 +1792,7 @@ class LibraryRepository(val context: Context) {
                         SourceKind.SMB ->
                             smb.bytes(uri.toString(), source, sourceSecret(source), limit)
                         SourceKind.NFS -> nfs.bytes(source, uri.toString(), limit)
-                        else ->
-                            dav.bytes(uri.toString(), source, sourceSecret(source), limit)
+                        else -> dav.bytes(uri.toString(), source, sourceSecret(source), limit)
                     }
                 }
             }

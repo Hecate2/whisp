@@ -42,57 +42,59 @@ internal class OfflineStore(private val repository: LibraryRepository) {
         )
     }
 
-    suspend fun downloadWork(id: String) = withWorkLock(id) { detail ->
-        require(detail.tracks.isNotEmpty()) { "作品没有音轨" }
-        for (track in detail.tracks) {
-            val uri = repository.resolve(track.id)
-            val request =
-                DownloadRequest.Builder(track.id, uri.toUri())
-                    .setMimeType(MediaFormats.videoMimeType(track.fileName))
-                    .setCustomCacheKey(track.id)
-                    .build()
-            DownloadService.sendAddDownload(
-                repository.context,
-                OfflineService::class.java,
-                request,
-                false,
-            )
-        }
-        WorkManager.getInstance(repository.context)
-            .enqueueUniqueWork(
-                "attachments-$id",
-                ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<AttachmentsWorker>()
-                    .setInputData(workDataOf("workId" to id))
-                    .build(),
-            )
-    }
-
-    suspend fun downloadAttachments(id: String) = withWorkLock(id) { detail ->
-        detail.attachments.forEach { attachment ->
-            if (repository.offlineFile(attachment.id) == null)
-                atomicFile(
-                    File(repository.offlineDir, attachment.id),
-                    repository.readAsset(attachment.id, 64 * 1024 * 1024),
-                )
-        }
-        detail.work.coverId?.let { cover ->
-            val target = File(repository.offlineDir, cover)
-            if (!target.isFile) {
-                val custom =
-                    File(repository.customArtworkDir, cover).takeIf { it.isFile }
-                        ?: File(repository.artworkDir, cover).takeIf {
-                            cover == stableId("${detail.work.id}|custom-cover") && it.isFile
-                        }
-                atomicFile(
-                    target,
-                    custom?.readBytes() ?: repository.readAsset(cover, 16 * 1024 * 1024),
+    suspend fun downloadWork(id: String) =
+        withWorkLock(id) { detail ->
+            require(detail.tracks.isNotEmpty()) { "作品没有音轨" }
+            for (track in detail.tracks) {
+                val uri = repository.resolve(track.id)
+                val request =
+                    DownloadRequest.Builder(track.id, uri.toUri())
+                        .setMimeType(MediaFormats.videoMimeType(track.fileName))
+                        .setCustomCacheKey(track.id)
+                        .build()
+                DownloadService.sendAddDownload(
+                    repository.context,
+                    OfflineService::class.java,
+                    request,
+                    false,
                 )
             }
+            WorkManager.getInstance(repository.context)
+                .enqueueUniqueWork(
+                    "attachments-$id",
+                    ExistingWorkPolicy.KEEP,
+                    OneTimeWorkRequestBuilder<AttachmentsWorker>()
+                        .setInputData(workDataOf("workId" to id))
+                        .build(),
+                )
         }
-        repository.dao.attachmentsReady(id, true)
-        repository.storageChanged()
-    }
+
+    suspend fun downloadAttachments(id: String) =
+        withWorkLock(id) { detail ->
+            detail.attachments.forEach { attachment ->
+                if (repository.offlineFile(attachment.id) == null)
+                    atomicFile(
+                        File(repository.offlineDir, attachment.id),
+                        repository.readAsset(attachment.id, 64 * 1024 * 1024),
+                    )
+            }
+            detail.work.coverId?.let { cover ->
+                val target = File(repository.offlineDir, cover)
+                if (!target.isFile) {
+                    val custom =
+                        File(repository.customArtworkDir, cover).takeIf { it.isFile }
+                            ?: File(repository.artworkDir, cover).takeIf {
+                                cover == stableId("${detail.work.id}|custom-cover") && it.isFile
+                            }
+                    atomicFile(
+                        target,
+                        custom?.readBytes() ?: repository.readAsset(cover, 16 * 1024 * 1024),
+                    )
+                }
+            }
+            repository.dao.attachmentsReady(id, true)
+            repository.storageChanged()
+        }
 
     suspend fun setCover(work: WorkEntity, uri: Uri) =
         withContext(Dispatchers.IO) {
@@ -104,8 +106,7 @@ internal class OfflineStore(private val repository: LibraryRepository) {
                         boundedRead(it, 16 * 1024 * 1024)
                     } ?: error("无法读取图片")
                 atomicFile(File(repository.customArtworkDir, id), bytes)
-                if (latest.offlineAttachments)
-                    atomicFile(File(repository.offlineDir, id), bytes)
+                if (latest.offlineAttachments) atomicFile(File(repository.offlineDir, id), bytes)
                 repository.dao.updateWorkCover(work.id, id)
                 repository.artworkRevision.update { it + 1 }
                 repository.storageChanged()
@@ -140,7 +141,9 @@ class AttachmentsWorker(context: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val id = inputData.getString("workId") ?: return Result.failure()
         return try {
-            (applicationContext as app.whisp.WhispApp).repository.offlineStore
+            (applicationContext as app.whisp.WhispApp)
+                .repository
+                .offlineStore
                 .downloadAttachments(id)
             Result.success()
         } catch (e: CancellationException) {

@@ -191,7 +191,9 @@ internal fun SourcesPage(
                         Muted,
                     ) {
                         if (complete)
-                            model.action { model.repository.offlineStore.removeOffline(detail.work.id) }
+                            model.action {
+                                model.repository.offlineStore.removeOffline(detail.work.id)
+                            }
                         else model.download(detail.work.id)
                     }
                 }
@@ -345,7 +347,11 @@ internal fun SourcesPage(
                             selectedId = null
                         },
                     ) {
-                        Text(if (source.kindType in setOf(SourceKind.ASMRONE, SourceKind.DLSITE)) "浏览" else "刷新")
+                        Text(
+                            if (source.kindType in setOf(SourceKind.ASMRONE, SourceKind.DLSITE))
+                                "浏览"
+                            else "刷新",
+                        )
                     }
                 },
                 dismissButton = {

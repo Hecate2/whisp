@@ -11,9 +11,9 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 /**
- * Coalesces concurrent requests for the same key into a single execution.
- * Cleanup belongs to the fetch itself: a screen can disappear before the shared
- * fetch completes, and a later request must never reuse a deleted entry.
+ * Coalesces concurrent requests for the same key into a single execution. Cleanup belongs to the
+ * fetch itself: a screen can disappear before the shared fetch completes, and a later request must
+ * never reuse a deleted entry.
  */
 internal class Singleflight<K, V>(private val scope: CoroutineScope, permits: Int) {
     private val lanes = Semaphore(permits)

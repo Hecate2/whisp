@@ -107,7 +107,8 @@ class PlaybackService : MediaLibraryService() {
                     if (playbackState == Player.STATE_ENDED && player.playWhenReady) player.pause()
                     val id = player.currentMediaItem?.mediaId ?: return
                     val duration = player.duration
-                    // Duration settles when content is ready; later buffering flips need no rewrite.
+                    // Duration settles when content is ready; later buffering flips need no
+                    // rewrite.
                     if (
                         duration > 0 &&
                             (playbackState == Player.STATE_READY ||
@@ -367,26 +368,30 @@ class PlaybackService : MediaLibraryService() {
                             session: MediaSession,
                             controller: MediaSession.ControllerInfo,
                             isForPlayback: Boolean,
-                        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.ioResult {
-                            val snapshot = catalog.snapshot() ?: error("暂无播放记录")
-                            if (isForPlayback) {
-                                val items =
-                                    snapshot.tracks.map { repository.mediaItem(it, snapshot.work) }
-                                MediaSession.MediaItemsWithStartPosition(
-                                    items,
-                                    snapshot.position.index,
-                                    snapshot.position.positionMs,
-                                )
-                            } else {
-                                // Boot-time requests must not resolve audio or connect to a remote
-                                // source.
-                                MediaSession.MediaItemsWithStartPosition(
-                                    listOf(catalog.recentItem(snapshot)),
-                                    0,
-                                    snapshot.position.positionMs,
-                                )
+                        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+                            scope.ioResult {
+                                val snapshot = catalog.snapshot() ?: error("暂无播放记录")
+                                if (isForPlayback) {
+                                    val items =
+                                        snapshot.tracks.map {
+                                            repository.mediaItem(it, snapshot.work)
+                                        }
+                                    MediaSession.MediaItemsWithStartPosition(
+                                        items,
+                                        snapshot.position.index,
+                                        snapshot.position.positionMs,
+                                    )
+                                } else {
+                                    // Boot-time requests must not resolve audio or connect to a
+                                    // remote
+                                    // source.
+                                    MediaSession.MediaItemsWithStartPosition(
+                                        listOf(catalog.recentItem(snapshot)),
+                                        0,
+                                        snapshot.position.positionMs,
+                                    )
+                                }
                             }
-                        }
                     },
                 )
                 .setSessionActivity(
@@ -447,8 +452,7 @@ class PlaybackService : MediaLibraryService() {
     private fun reconcilePlaybackJobs() {
         val state = player.playbackState
         if (
-            player.playWhenReady &&
-                (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            player.playWhenReady && (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
         ) {
             if (checkpointJob?.isActive != true)
                 checkpointJob = scope.launch {

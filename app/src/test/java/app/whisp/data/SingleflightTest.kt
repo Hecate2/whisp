@@ -14,15 +14,16 @@ class SingleflightTest {
         val flights = Singleflight<String, String>(scope, 4)
         val executions = AtomicInteger(0)
         val results =
-            (1..16).map {
-                scope.async {
-                    flights.run("cover:id") {
-                        executions.incrementAndGet()
-                        delay(50)
-                        "bytes"
+            (1..16)
+                .map {
+                    scope.async {
+                        flights.run("cover:id") {
+                            executions.incrementAndGet()
+                            delay(50)
+                            "bytes"
+                        }
                     }
                 }
-            }
                 .awaitAll()
         assertEquals(1, executions.get())
         assertTrue(results.all { it == "bytes" })
@@ -65,17 +66,16 @@ class SingleflightTest {
     fun cancelledKeyCanBeFetchedAgain() = runIsolatedTest { scope ->
         val flights = Singleflight<String, String>(scope, 4)
         val gate = Gate()
-        val first =
-            scope.async {
-                try {
-                    flights.run("k") {
-                        gate.arrive()
-                        "stale"
-                    }
-                } catch (e: CancellationException) {
-                    throw e
+        val first = scope.async {
+            try {
+                flights.run("k") {
+                    gate.arrive()
+                    "stale"
                 }
+            } catch (e: CancellationException) {
+                throw e
             }
+        }
         gate.awaitArrival()
         flights.cancelAndJoin("k")
         try {
@@ -89,7 +89,12 @@ class SingleflightTest {
     fun joinAllWaitsForInflightWork() = runIsolatedTest { scope ->
         val flights = Singleflight<String, String>(scope, 4)
         val release = Channel<Unit>(1)
-        val first = scope.async { flights.run("k") { release.receive(); "done" } }
+        val first = scope.async {
+            flights.run("k") {
+                release.receive()
+                "done"
+            }
+        }
         val joined = scope.async { flights.joinAll() }
         release.send(Unit)
         joined.await()

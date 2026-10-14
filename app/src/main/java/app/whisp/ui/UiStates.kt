@@ -41,6 +41,4 @@ data class PlaybackState(
 
 internal fun playControlLabel(state: PlaybackState): String =
     if (state.playWhenReady) "暂停"
-    else if (state.failed) "重试播放"
-    else if (state.ended) "重新播放作品"
-    else "播放"
+    else if (state.failed) "重试播放" else if (state.ended) "重新播放作品" else "播放"

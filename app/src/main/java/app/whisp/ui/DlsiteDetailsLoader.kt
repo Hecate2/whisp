@@ -3,7 +3,6 @@ package app.whisp.ui
 
 import app.whisp.data.DlsiteClient
 import app.whisp.data.DlsiteDetails
-import app.whisp.data.DlsiteStatistics
 import app.whisp.data.LibraryRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope

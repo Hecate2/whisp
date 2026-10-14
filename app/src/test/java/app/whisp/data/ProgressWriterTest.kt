@@ -67,19 +67,18 @@ class ProgressWriterTest {
     }
 
     @Test
-    fun duplicateCallbacksAreIgnoredButReturningToAnotherWorkIsSaved() =
-        runIsolatedTest { scope ->
-            val saved = mutableListOf<ProgressEntity>()
-            val writer = ProgressWriter(scope, { saved += it })
-            writer.save(ProgressEntity("a", "a1", 100, 1))
-            writer.flush()
-            writer.save(ProgressEntity("a", "a1", 100, 2))
-            writer.flush()
-            assertEquals(1, saved.size)
-            writer.save(ProgressEntity("b", "b1", 100, 3))
-            writer.flush()
-            writer.save(ProgressEntity("a", "a1", 100, 4))
-            writer.flush()
-            assertEquals(listOf("a", "b", "a"), saved.map { it.workId })
-        }
+    fun duplicateCallbacksAreIgnoredButReturningToAnotherWorkIsSaved() = runIsolatedTest { scope ->
+        val saved = mutableListOf<ProgressEntity>()
+        val writer = ProgressWriter(scope, { saved += it })
+        writer.save(ProgressEntity("a", "a1", 100, 1))
+        writer.flush()
+        writer.save(ProgressEntity("a", "a1", 100, 2))
+        writer.flush()
+        assertEquals(1, saved.size)
+        writer.save(ProgressEntity("b", "b1", 100, 3))
+        writer.flush()
+        writer.save(ProgressEntity("a", "a1", 100, 4))
+        writer.flush()
+        assertEquals(listOf("a", "b", "a"), saved.map { it.workId })
+    }
 }
