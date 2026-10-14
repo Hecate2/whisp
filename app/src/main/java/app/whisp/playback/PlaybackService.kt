@@ -121,6 +121,13 @@ class PlaybackService : MediaLibraryService() {
                     decoderCorrelator.onDecoderInitialized("audio", decoderName)
                 }
 
+                override fun onAudioDecoderReleased(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                ) {
+                    decoderCorrelator.onDecoderReleased("audio")
+                }
+
                 override fun onVideoDecoderInitialized(
                     eventTime: AnalyticsListener.EventTime,
                     decoderName: String,
@@ -128,6 +135,13 @@ class PlaybackService : MediaLibraryService() {
                     initializationDurationMs: Long,
                 ) {
                     decoderCorrelator.onDecoderInitialized("video", decoderName)
+                }
+
+                override fun onVideoDecoderReleased(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                ) {
+                    decoderCorrelator.onDecoderReleased("video")
                 }
             },
         )

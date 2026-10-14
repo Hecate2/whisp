@@ -93,4 +93,35 @@ class DecoderCorrelatorTest {
         assertTrue(log[2].replace)
         assertTrue(log[3].replace)
     }
+
+    @Test
+    fun releasedDecoderDoesNotAttachToBypassFormat() {
+        val log = mutableListOf<Emission>()
+        val correlator = correlator(log)
+        // init AAC -> format AAC -> release AAC -> MP3 bypass format.
+        correlator.onDecoderInitialized("audio", "aac-decoder")
+        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null))
+        correlator.onDecoderReleased("audio")
+        correlator.onFormatChanged("audio", FormatSnapshot("audio/mpeg", "mp3"))
+        assertEquals(3, log.size)
+        assertEquals(
+            Emission("audio", FormatSnapshot("audio/mpeg", "mp3"), null, log[2].id, false),
+            log[2],
+        )
+    }
+
+    @Test
+    fun releaseDropsAPendingPairing() {
+        val log = mutableListOf<Emission>()
+        val correlator = correlator(log)
+        correlator.onDecoderInitialized("audio", "aac-decoder")
+        correlator.onDecoderReleased("audio")
+        correlator.onFormatChanged("audio", FormatSnapshot("audio/mpeg", "mp3"))
+        assertEquals(2, log.size)
+        assertEquals(
+            Emission("audio", FormatSnapshot("audio/mpeg", "mp3"), null, log[1].id, false),
+            log[1],
+        )
+        assertNotEquals(log[0].id, log[1].id)
+    }
 }
