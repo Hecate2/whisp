@@ -24,7 +24,8 @@ internal object DecoderAudit {
         candidates: List<CodecCandidate>,
     ): DecoderEvent {
         val hardware =
-            decoderName?.let { name -> candidates.firstOrNull { it.name == name } }
+            decoderName
+                ?.let { name -> candidates.firstOrNull { it.name == name } }
                 ?.hardwareAccelerated
         return DecoderEvent(kind, mime, codecs, decoderName, hardware)
     }

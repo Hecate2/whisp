@@ -16,7 +16,9 @@ class PlaybackDiagnosticsTest {
     @Test
     fun recordedEventsRoundTrip() {
         val diagnostics = diagnostics()
-        diagnostics.record(DecoderEvent("audio", "audio/mp4a-latm", "mp4a.40.2", "c2 decoder", true))
+        diagnostics.record(
+            DecoderEvent("audio", "audio/mp4a-latm", "mp4a.40.2", "c2 decoder", true),
+        )
         diagnostics.record(DecoderEvent("offload", null, null, null, null, true))
         val snapshot = diagnostics.snapshot()
         assertEquals(2, snapshot.size)
@@ -30,7 +32,9 @@ class PlaybackDiagnosticsTest {
     fun onlyTheLatestEventsAreKept() {
         val diagnostics = diagnostics()
         repeat(70) { index ->
-            diagnostics.record(DecoderEvent("audio", "audio/mp4a-latm", null, "decoder-$index", true))
+            diagnostics.record(
+                DecoderEvent("audio", "audio/mp4a-latm", null, "decoder-$index", true),
+            )
         }
         val snapshot = diagnostics.snapshot()
         assertEquals(64, snapshot.size)

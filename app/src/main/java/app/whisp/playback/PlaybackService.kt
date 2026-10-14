@@ -591,8 +591,9 @@ class PlaybackService : MediaLibraryService() {
         scope.launch(Dispatchers.IO) {
             val candidates = runCatching {
                 val mime = format?.sampleMimeType ?: return@runCatching emptyList<CodecCandidate>()
-                MediaCodecUtil.getDecoderInfos(mime, false, false)
-                    .map { CodecCandidate(it.name, it.hardwareAccelerated) }
+                MediaCodecUtil.getDecoderInfos(mime, false, false).map {
+                    CodecCandidate(it.name, it.hardwareAccelerated)
+                }
             }
                 .getOrDefault(emptyList())
             repository.playbackDiagnostics.record(
