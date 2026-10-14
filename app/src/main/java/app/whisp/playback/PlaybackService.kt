@@ -48,7 +48,8 @@ class PlaybackService : MediaLibraryService() {
     private var videoController: MediaSession.ControllerInfo? = null
     // Player callbacks arrive serially on the main thread, so enqueue order
     // matches event order and the single consumer below preserves it.
-    private val diagnosticTasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)    private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
+    private val diagnosticTasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
 
     companion object {
         const val TIMER = "whisp.timer"
