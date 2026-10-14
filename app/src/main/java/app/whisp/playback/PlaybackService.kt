@@ -121,7 +121,7 @@ class PlaybackService : MediaLibraryService() {
         player.addAudioOffloadListener(
             object : ExoPlayer.AudioOffloadListener {
                 override fun onOffloadedPlayback(offloadedPlayback: Boolean) {
-                    repository.playbackDiagnostics.record(DecoderAudit.offloaded(offloadedPlayback))
+                    recordOffload(offloadedPlayback)
                 }
             },
         )
@@ -607,6 +607,16 @@ class PlaybackService : MediaLibraryService() {
                     ),
                 )
                 .build()
+    }
+
+    private fun recordOffload(offloaded: Boolean) {
+        // Share the decoder record lock so an offload flip cannot slip between
+        // a provisional entry and the format event that replaces it.
+        scope.launch(Dispatchers.IO) {
+            decoderRecords.withLock {
+                repository.playbackDiagnostics.record(DecoderAudit.offloaded(offloaded))
+            }
+        }
     }
 
     private fun onCorrelatedDecoder(
