@@ -799,7 +799,7 @@ private fun DetailPage(
     val history by model.progress.collectAsStateWithLifecycle()
     val downloads by model.downloads.collectAsStateWithLifecycle()
     val resume = history.any { it.workId == detail.work.id }
-    val offline = model.repository.isOffline(detail)
+    val offline = model.repository.offlineStore.isOffline(detail)
     val sections = remember(detail.tracks) { TrackSections.groups(detail.tracks) }
     val remembered = history.firstOrNull { it.workId == detail.work.id }
     val finished =
@@ -1112,7 +1112,7 @@ private fun InfoDialog(
     val scope = rememberCoroutineScope()
     val cover =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let { model.action { model.repository.setCover(detail.work, it) } }
+            uri?.let { model.action { model.repository.offlineStore.setCover(detail.work, it) } }
         }
     if (confirmingRemoval) {
         AlertDialog(

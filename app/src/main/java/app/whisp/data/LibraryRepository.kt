@@ -20,7 +20,6 @@ import androidx.media3.exoplayer.scheduler.Requirements
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.work.*
-import app.whisp.playback.OfflineService
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -65,7 +64,7 @@ class LibraryRepository(val context: Context) {
             .build()
     val dav = WebDavClient(http)
     private val onlineHttp = http.newBuilder().followRedirects(true).build()
-    private val onlineWorkChanges = Mutex()
+    internal val onlineWorkChanges = Mutex()
     val dlsite = DlsiteClient(onlineHttp)
     val dlsiteDiagnostics = DlsiteDiagnostics(context)
     private val dlsiteClients =
@@ -364,7 +363,7 @@ class LibraryRepository(val context: Context) {
                     val pinnedAttachments =
                         old?.attachments
                             .orEmpty()
-                            .filter { File(offlineDir, it.id).isFile }
+                            .filter { offlineFile(it.id) != null }
                             .map { it.id }
                     dao.deleteStaleAttachments(
                         workId,
@@ -425,7 +424,7 @@ class LibraryRepository(val context: Context) {
     val progress = dao.observeProgress().stateIn(scope, SharingStarted.Eagerly, emptyList())
     val storageChanges = MutableStateFlow(0L)
 
-    private fun storageChanged() {
+    internal fun storageChanged() {
         storageChanges.update { it + 1 }
     }
 
@@ -476,16 +475,17 @@ class LibraryRepository(val context: Context) {
             )
         }
     val settings = settingsUpdates.stateIn(scope, SharingStarted.Eagerly, Settings())
-    private val offlineDir = File(context.filesDir, "offline/attachments").apply { mkdirs() }
-    private val artworkDir = File(context.filesDir, "artwork").apply { mkdirs() }
-    private val customArtworkDir = File(context.filesDir, "custom-artwork").apply { mkdirs() }
+    internal val offlineDir = File(context.filesDir, "offline/attachments").apply { mkdirs() }
+
+    internal fun offlineFile(id: String): File? = File(offlineDir, id).takeIf { it.isFile }
+    internal val artworkDir = File(context.filesDir, "artwork").apply { mkdirs() }
+    internal val customArtworkDir = File(context.filesDir, "custom-artwork").apply { mkdirs() }
     private val artworkCache =
         ImageFileCache(File(context.cacheDir, "artwork"), 64 * MIB, ::storageChanged)
     private val previewCache =
         ImageFileCache(File(context.cacheDir, "previews"), 24 * MIB, ::storageChanged)
     private val imageWrites = Mutex()
-    private val imageLanes = Semaphore(4)
-    private val imageRequests = mutableMapOf<String, Deferred<File?>>()
+    private val imageFlights = Singleflight<String, File?>(scope, 4)
     private val storageReady = CompletableDeferred<Unit>()
     val artworkReload = MutableStateFlow(0)
     private val streamingEvictor = AdjustableCacheEvictor(Long.MAX_VALUE, ::storageChanged)
@@ -1030,7 +1030,7 @@ class LibraryRepository(val context: Context) {
             obsoleteTracks =
                 (oldTracks.keys - (indexed.tracks.map { it.id } + pinned).toSet()).toList()
             val pinnedAttachments =
-                old?.attachments.orEmpty().filter { File(offlineDir, it.id).isFile }.map { it.id }
+                old?.attachments.orEmpty().filter { offlineFile(it.id) != null }.map { it.id }
             dao.deleteStaleAttachments(
                 work.workId,
                 indexed.attachments.map { it.id } + pinnedAttachments,
@@ -1057,14 +1057,14 @@ class LibraryRepository(val context: Context) {
     private fun removeObsoleteDownloads(ids: List<String>) {
         for (id in ids) {
             if (downloadManager.downloadIndex.getDownload(id) != null)
-                DownloadService.sendRemoveDownload(context, OfflineService::class.java, id, false)
+                offlineStore.removeTrackDownload(id)
             streamingCache.removeResource(id)
         }
     }
 
     private fun offlineFilesPresent(work: WorkEntity, attachments: List<AttachmentEntity>) =
-        attachments.all { File(offlineDir, it.id).isFile } &&
-            (work.coverId == null || File(offlineDir, work.coverId).isFile)
+        attachments.all { offlineFile(it.id) != null } &&
+            (work.coverId == null || offlineFile(work.coverId) != null)
 
     suspend fun updateDlsiteMetadata(id: String, client: DlsiteClient = dlsite) =
         withContext(Dispatchers.IO) {
@@ -1140,7 +1140,7 @@ class LibraryRepository(val context: Context) {
         }
 
     suspend fun ensureDlsiteImage(id: String, url: String): File? =
-        imageRequest(id) {
+        imageFlights.run(id) {
             artworkCache.get(id)
                 ?: cacheArtwork(
                         id,
@@ -1178,24 +1178,13 @@ class LibraryRepository(val context: Context) {
                     dao.deleteWorkBookmarks(id)
                     dao.deleteWork(id)
                 }
-                val requests =
-                    synchronized(imageRequests) {
-                        assets.flatMap { asset ->
-                            listOfNotNull(
-                                imageRequests["cover:$asset"],
-                                imageRequests["preview:$asset"],
-                            )
-                        }
-                    }
-                requests.forEach { it.cancelAndJoin() }
-                detail.tracks.forEach { track ->
-                    DownloadService.sendRemoveDownload(
-                        context,
-                        OfflineService::class.java,
-                        track.id,
-                        false,
-                    )
-                    streamingCache.removeResource(track.id)
+                assets.forEach { asset ->
+                    imageFlights.cancelAndJoin("cover:$asset")
+                    imageFlights.cancelAndJoin("preview:$asset")
+                }
+                detail.tracks.forEach {
+                    offlineStore.removeTrackDownload(it.id)
+                    streamingCache.removeResource(it.id)
                 }
                 imageWrites.withLock {
                     assets.forEach { asset ->
@@ -1215,7 +1204,7 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun ensureCatalogArtwork(id: String, url: String, sourceId: String): File? =
-        imageRequest("cover:$id") {
+        imageFlights.run("cover:$id") {
             storageReady.await()
             val source = dao.source(sourceId) ?: error("来源已移除")
             artwork(id)
@@ -1337,7 +1326,7 @@ class LibraryRepository(val context: Context) {
                                             old.coverUrl != null ||
                                                 cover == stableId("${old.id}|custom-cover") ||
                                                 cover in indexedAttachments ||
-                                                File(offlineDir, cover).isFile
+                                                offlineFile(cover) != null
                                         } ?: new.coverId,
                                     coverUrl = old.coverUrl,
                                     originalArtist = old.originalArtist,
@@ -1372,7 +1361,7 @@ class LibraryRepository(val context: Context) {
                         .flatMap { dao.unlocatedTracks(it) }
                         .filter {
                             downloadManager.downloadIndex.getDownload(it.id)?.state !=
-                                Download.STATE_COMPLETED && !File(offlineDir, it.id).isFile
+                                Download.STATE_COMPLETED && offlineFile(it.id) == null
                         }
                         .map { it.id }
                 obsoleteTracks.chunked(500).forEach { dao.deleteTracks(it) }
@@ -1380,7 +1369,7 @@ class LibraryRepository(val context: Context) {
                     changedWorks
                         .chunked(500)
                         .flatMap { dao.unlocatedAttachments(it) }
-                        .filter { !File(offlineDir, it.id).isFile }
+                        .filter { offlineFile(it.id) == null }
                         .map { it.id }
                 obsoleteAttachments.chunked(500).forEach { dao.deleteAttachments(it) }
                 dao.putSource(latestSource.copy(lastScan = generation, error = null))
@@ -1559,12 +1548,7 @@ class LibraryRepository(val context: Context) {
                             Download.STATE_COMPLETED
                     }
                     .forEach {
-                        DownloadService.sendRemoveDownload(
-                            context,
-                            OfflineService::class.java,
-                            it.id,
-                            false,
-                        )
+                        offlineStore.removeTrackDownload(it.id)
                     }
             }
         }
@@ -1581,8 +1565,7 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun resolve(id: String): String {
-        val offline = File(offlineDir, id)
-        if (offline.isFile) return Uri.fromFile(offline).toString()
+        offlineFile(id)?.let { return Uri.fromFile(it).toString() }
         downloadManager.downloadIndex
             .getDownload(id)
             ?.takeIf { it.state == Download.STATE_COMPLETED }
@@ -1607,14 +1590,14 @@ class LibraryRepository(val context: Context) {
                 tracks.map { it.id }.chunked(500).flatMap { dao.locatedAssets(it) }.toSet()
             tracks.filter {
                 it.id in located ||
-                    File(offlineDir, it.id).isFile ||
+                    offlineFile(it.id) != null ||
                     downloadManager.downloadIndex.getDownload(it.id)?.state ==
                         Download.STATE_COMPLETED
             }
         }
 
     fun artwork(id: String?): File? = id?.let { asset ->
-        File(offlineDir, asset).takeIf { it.isFile }
+        offlineFile(asset)
             ?: File(customArtworkDir, asset).takeIf { it.isFile }
             ?: artworkCache.get(asset)
             ?: File(artworkDir, asset).takeIf { it.isFile }
@@ -1626,7 +1609,7 @@ class LibraryRepository(val context: Context) {
     }
 
     suspend fun ensureArtwork(id: String): File? =
-        imageRequest("cover:$id") {
+        imageFlights.run("cover:$id") {
             storageReady.await()
             artwork(id)
                 ?: if (dao.locations(id).isEmpty() && dao.workByCover(id)?.coverUrl == null) null
@@ -1638,38 +1621,15 @@ class LibraryRepository(val context: Context) {
         }
 
     suspend fun previewImage(id: String): File =
-        imageRequest("preview:$id") {
+        imageFlights.run("preview:$id") {
             storageReady.await()
-            File(offlineDir, id).takeIf { it.isFile }
+            offlineFile(id)
                 ?: previewCache.get(id)
                 ?: run {
                     val bytes = ImageOptimizer.optimize(readAsset(id, 64 * 1024 * 1024), 2560)
                     imageWrites.withLock { previewCache.put(id, bytes) }
                 }
         } ?: throw IOException("图片不可读")
-
-    private suspend fun imageRequest(key: String, block: suspend () -> File?): File? {
-        val request =
-            synchronized(imageRequests) {
-                imageRequests[key]
-                    ?: scope
-                        .async(start = CoroutineStart.LAZY) { imageLanes.withPermit { block() } }
-                        .also { task ->
-                            imageRequests[key] = task
-                            // A screen can disappear before the shared fetch completes. Cleanup
-                            // belongs
-                            // to the fetch itself, otherwise a later request can reuse a deleted
-                            // file.
-                            task.invokeOnCompletion {
-                                synchronized(imageRequests) {
-                                    if (imageRequests[key] === task) imageRequests.remove(key)
-                                }
-                            }
-                            task.start()
-                        }
-            }
-        return request.await()
-    }
 
     /** Only indexed remote originals move to cache; custom and offline files remain durable. */
     internal suspend fun migrateImages() =
@@ -1724,16 +1684,7 @@ class LibraryRepository(val context: Context) {
     suspend fun clearTemporaryCache() =
         withContext(Dispatchers.IO) {
             storageReady.await()
-            // Let already requested images finish before clearing so they cannot restore stale
-            // cache.
-            val requests = synchronized(imageRequests) { imageRequests.values.toList() }
-            requests.forEach {
-                try {
-                    it.await()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {}
-            }
+            imageFlights.joinAll()
             imageWrites.withLock {
                 artworkCache.clear()
                 previewCache.clear()
@@ -1747,9 +1698,9 @@ class LibraryRepository(val context: Context) {
 
     suspend fun readAsset(id: String, limit: Int = 8 * 1024 * 1024): ByteArray =
         withContext(Dispatchers.IO) {
-            val offline = File(offlineDir, id)
-            if (offline.isFile)
-                return@withContext offline.inputStream().use { boundedRead(it, limit) }
+            offlineFile(id)?.let {
+                return@withContext it.inputStream().use { stream -> boundedRead(stream, limit) }
+            }
             dao.workByCover(id)?.coverUrl?.let { url ->
                 return@withContext onlineHttp.onlineBytes(
                     okhttp3.Request.Builder()
@@ -1837,94 +1788,11 @@ class LibraryRepository(val context: Context) {
             .build()
     }
 
-    suspend fun downloadWork(id: String) = onlineWorkChanges.withLock {
-        val detail = dao.details(id) ?: return@withLock
-        require(detail.tracks.isNotEmpty()) { "作品没有音轨" }
-        for (track in detail.tracks) {
-            val uri = resolve(track.id)
-            val request =
-                DownloadRequest.Builder(track.id, uri.toUri())
-                    .setMimeType(MediaFormats.videoMimeType(track.fileName))
-                    .setCustomCacheKey(track.id)
-                    .build()
-            DownloadService.sendAddDownload(context, OfflineService::class.java, request, false)
-        }
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(
-                "attachments-$id",
-                ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<AttachmentsWorker>()
-                    .setInputData(workDataOf("workId" to id))
-                    .build(),
-            )
-    }
-
-    suspend fun downloadAttachments(id: String) = onlineWorkChanges.withLock {
-        val detail = dao.details(id) ?: return@withLock
-        detail.attachments.forEach { attachment ->
-            val file = File(offlineDir, attachment.id)
-            if (!file.isFile) atomicFile(file, readAsset(attachment.id, 64 * 1024 * 1024))
-        }
-        detail.work.coverId?.let { cover ->
-            val target = File(offlineDir, cover)
-            if (!target.isFile) {
-                val custom =
-                    File(customArtworkDir, cover).takeIf { it.isFile }
-                        ?: File(artworkDir, cover).takeIf {
-                            cover == stableId("${detail.work.id}|custom-cover") && it.isFile
-                        }
-                atomicFile(target, custom?.readBytes() ?: readAsset(cover, 16 * 1024 * 1024))
-            }
-        }
-        dao.attachmentsReady(id, true)
-        storageChanged()
-    }
-
-    suspend fun setCover(work: WorkEntity, uri: Uri) =
-        withContext(Dispatchers.IO) {
-            onlineWorkChanges.withLock {
-                val latest = dao.work(work.id) ?: throw IOException("作品已删除")
-                val id = stableId("${work.id}|custom-cover")
-                val bytes =
-                    context.contentResolver.openInputStream(uri)?.use {
-                        boundedRead(it, 16 * 1024 * 1024)
-                    } ?: error("无法读取图片")
-                atomicFile(File(customArtworkDir, id), bytes)
-                if (latest.offlineAttachments) atomicFile(File(offlineDir, id), bytes)
-                dao.updateWorkCover(work.id, id)
-                artworkRevision.update { it + 1 }
-                storageChanged()
-            }
-        }
+    internal val offlineStore: OfflineStore by lazy { OfflineStore(this) }
 
     suspend fun editWorkIdentity(id: String, title: String, artist: String) {
         dao.updateWorkIdentity(id, title, artist)
     }
-
-    suspend fun removeOffline(id: String) {
-        WorkManager.getInstance(context).cancelUniqueWork("attachments-$id")
-        onlineWorkChanges.withLock {
-            val detail = dao.details(id) ?: return@withLock
-            detail.tracks.forEach { track ->
-                DownloadService.sendRemoveDownload(
-                    context,
-                    OfflineService::class.java,
-                    track.id,
-                    false,
-                )
-            }
-            detail.attachments.forEach { File(offlineDir, it.id).delete() }
-            detail.work.coverId?.let {
-                if (!dao.otherOfflineCover(it, id)) File(offlineDir, it).delete()
-            }
-            dao.attachmentsReady(id, false)
-            storageChanged()
-        }
-    }
-
-    fun isOffline(detail: WorkDetails): Boolean =
-        detail.work.offlineAttachments &&
-            detail.tracks.all { downloads.value[it.id]?.state == Download.STATE_COMPLETED }
 }
 
 fun boundedRead(stream: java.io.InputStream, limit: Int): ByteArray {
@@ -1937,19 +1805,4 @@ fun boundedRead(stream: java.io.InputStream, limit: Int): ByteArray {
         require(output.size() <= limit) { "文件过大" }
     }
     return output.toByteArray()
-}
-
-class AttachmentsWorker(context: Context, params: WorkerParameters) :
-    CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result {
-        val id = inputData.getString("workId") ?: return Result.failure()
-        return try {
-            (applicationContext as app.whisp.WhispApp).repository.downloadAttachments(id)
-            Result.success()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
-        }
-    }
 }

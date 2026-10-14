@@ -12,7 +12,7 @@ class BookmarkDraftTest {
         val draft = BookmarkDraft.fromCue("track", Cue(60_000, 62_000, "台词"), 500)
         assertEquals("track", draft.trackId)
         assertEquals(60_500, draft.position)
-        assertEquals(62_500, draft.end)
+        assertEquals(62_500L, draft.end)
         assertEquals("台词", draft.title)
     }
 

@@ -29,6 +29,7 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadService
 import app.whisp.DlsiteLoginActivity
 import app.whisp.data.SourceKind
+import app.whisp.data.kindType
 import app.whisp.playback.OfflineService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -172,7 +173,7 @@ internal fun SourcesPage(
             }
         items(offlineWorks, key = { it.work.id }) { detail ->
             val states = detail.tracks.mapNotNull { downloads[it.id] }
-            val complete = model.repository.isOffline(detail)
+            val complete = model.repository.offlineStore.isOffline(detail)
             val failed = states.any { it.state == Download.STATE_FAILED }
             val percentage =
                 states.map { it.percentDownloaded.takeIf { value -> value >= 0 } ?: 0f }.sum() /
@@ -190,7 +191,7 @@ internal fun SourcesPage(
                         Muted,
                     ) {
                         if (complete)
-                            model.action { model.repository.removeOffline(detail.work.id) }
+                            model.action { model.repository.offlineStore.removeOffline(detail.work.id) }
                         else model.download(detail.work.id)
                     }
                 }

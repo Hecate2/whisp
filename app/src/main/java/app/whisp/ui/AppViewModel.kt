@@ -684,7 +684,7 @@ class AppViewModel(
 
     fun favorite(id: String) = action { repository.dao.toggleFavorite(id) }
 
-    fun download(id: String) = action { repository.downloadWork(id) }
+    fun download(id: String) = action { repository.offlineStore.downloadWork(id) }
 
     fun removeSource(sourceId: String) = action {
         if (repository.dao.source(sourceId)?.kindType == SourceKind.DLSITE) {
