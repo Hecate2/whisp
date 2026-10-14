@@ -12,6 +12,7 @@ data class DecoderEvent(
     val decoder: String?,
     val hardwareAccelerated: Boolean?,
     val offloaded: Boolean? = null,
+    val id: String? = null,
 )
 
 /** Matches an initialized decoder against the queried codec list. */

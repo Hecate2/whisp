@@ -9,12 +9,13 @@ class DecoderCorrelatorTest {
         val kind: String,
         val snapshot: FormatSnapshot?,
         val decoder: String?,
+        val id: String,
         val replace: Boolean,
     )
 
     private fun correlator(log: MutableList<Emission>) =
-        DecoderCorrelator { kind, snapshot, decoder, replace ->
-            log += Emission(kind, snapshot, decoder, replace)
+        DecoderCorrelator { kind, snapshot, decoder, id, replace ->
+            log += Emission(kind, snapshot, decoder, id, replace)
         }
 
     @Test
@@ -26,15 +27,18 @@ class DecoderCorrelatorTest {
         correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null))
         correlator.onDecoderInitialized("audio", "flac-decoder")
         correlator.onFormatChanged("audio", FormatSnapshot("audio/flac", "fLaC"))
+        assertEquals(4, log.size)
+        assertEquals(Emission("audio", null, "aac-decoder", log[0].id, false), log[0])
         assertEquals(
-            listOf(
-                Emission("audio", null, "aac-decoder", false),
-                Emission("audio", FormatSnapshot("audio/aac", null), "aac-decoder", true),
-                Emission("audio", FormatSnapshot("audio/aac", null), "flac-decoder", false),
-                Emission("audio", FormatSnapshot("audio/flac", "fLaC"), "flac-decoder", true),
-            ),
-            log,
+            Emission("audio", FormatSnapshot("audio/aac", null), "aac-decoder", log[0].id, true),
+            log[1],
         )
+        assertEquals(Emission("audio", FormatSnapshot("audio/aac", null), "flac-decoder", log[2].id, false), log[2])
+        assertEquals(
+            Emission("audio", FormatSnapshot("audio/flac", "fLaC"), "flac-decoder", log[2].id, true),
+            log[3],
+        )
+        assertNotEquals(log[0].id, log[2].id)
     }
 
     @Test
@@ -43,12 +47,11 @@ class DecoderCorrelatorTest {
         val correlator = correlator(log)
         correlator.onDecoderInitialized("video", "avc-decoder")
         correlator.onFormatChanged("video", FormatSnapshot("video/avc", "avc1"))
+        assertEquals(2, log.size)
+        assertEquals(log[0].id, log[1].id)
         assertEquals(
-            listOf(
-                Emission("video", null, "avc-decoder", false),
-                Emission("video", FormatSnapshot("video/avc", "avc1"), "avc-decoder", true),
-            ),
-            log,
+            Emission("video", FormatSnapshot("video/avc", "avc1"), "avc-decoder", log[0].id, true),
+            log[1],
         )
     }
 
@@ -60,9 +63,10 @@ class DecoderCorrelatorTest {
         correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null))
         // No re-init: the continuing decoder still applies.
         correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", "mp4a"))
+        assertEquals(3, log.size)
         assertEquals(
-            Emission("audio", FormatSnapshot("audio/aac", "mp4a"), "aac-decoder", false),
-            log.last(),
+            Emission("audio", FormatSnapshot("audio/aac", "mp4a"), "aac-decoder", log[2].id, false),
+            log[2],
         )
     }
 
@@ -74,14 +78,10 @@ class DecoderCorrelatorTest {
         correlator.onDecoderInitialized("video", "avc-decoder")
         correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null))
         correlator.onFormatChanged("video", FormatSnapshot("video/avc", null))
-        assertEquals(
-            listOf(
-                Emission("audio", null, "aac-decoder", false),
-                Emission("video", null, "avc-decoder", false),
-                Emission("audio", FormatSnapshot("audio/aac", null), "aac-decoder", true),
-                Emission("video", FormatSnapshot("video/avc", null), "avc-decoder", true),
-            ),
-            log,
-        )
+        assertEquals(4, log.size)
+        assertEquals(log[0].id, log[2].id)
+        assertEquals(log[1].id, log[3].id)
+        assertTrue(log[2].replace)
+        assertTrue(log[3].replace)
     }
 }

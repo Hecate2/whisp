@@ -68,4 +68,46 @@ class PlaybackDiagnosticsTest {
         assertEquals(2, snapshot.size)
         assertEquals("video/avc", snapshot.last().mime)
     }
+
+    @Test
+    fun replaceByIdFindsTheProvisionalAcrossOffload() {
+        val diagnostics = diagnostics()
+        diagnostics.record(DecoderEvent("audio", null, null, "aac-decoder", null, id = "init-1"))
+        diagnostics.record(DecoderEvent("offload", null, null, null, null, true, id = "off-1"))
+        diagnostics.replaceById(
+            "init-1",
+            DecoderEvent("audio", "audio/mp4a-latm", null, "aac-decoder", true, id = "init-1"),
+        )
+        val snapshot = diagnostics.snapshot()
+        assertEquals(2, snapshot.size)
+        assertEquals("audio/mp4a-latm", snapshot[0].mime)
+        assertEquals("offload", snapshot[1].kind)
+    }
+
+    @Test
+    fun replaceByIdAppendsWhenMissing() {
+        val diagnostics = diagnostics()
+        diagnostics.replaceById(
+            "missing",
+            DecoderEvent("audio", "audio/aac", null, "aac-decoder", true, id = "missing"),
+        )
+        assertEquals("missing", diagnostics.snapshot().single().id)
+    }
+
+    @Test
+    fun replaceByIdKeepsTheCap() {
+        val diagnostics = diagnostics()
+        repeat(64) { index ->
+            diagnostics.record(
+                DecoderEvent("audio", null, null, "decoder-$index", null, id = "id-$index"),
+            )
+        }
+        diagnostics.replaceById(
+            "id-0",
+            DecoderEvent("audio", "audio/aac", null, "decoder-0", true, id = "id-0"),
+        )
+        val snapshot = diagnostics.snapshot()
+        assertEquals(64, snapshot.size)
+        assertEquals("audio/aac", snapshot.first().mime)
+    }
 }

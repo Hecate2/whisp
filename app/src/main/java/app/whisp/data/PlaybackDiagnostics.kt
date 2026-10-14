@@ -23,9 +23,10 @@ class PlaybackDiagnostics(private val context: Context) {
     private fun writeEvents(events: List<JsonElement>) {
         preferences.edit { putString("events", JsonArray(events).toString()) }
     }
-
-    private fun encode(event: DecoderEvent): JsonObject = buildJsonObject {
-        put("kind", event.kind)
+    private fun encode(event: DecoderEvent): JsonObject =
+        buildJsonObject {
+            event.id?.let { put("id", it) }
+            put("kind", event.kind)
         event.mime?.let { put("mime", it) }
         event.codecs?.let { put("codecs", it) }
         event.decoder?.let { put("decoder", it) }
@@ -50,6 +51,19 @@ class PlaybackDiagnostics(private val context: Context) {
     }
 
     @Synchronized
+    fun replaceById(id: String, event: DecoderEvent) {
+        val previous = readEvents()
+        val index = previous.indexOfFirst { it.jsonObject["id"]?.jsonPrimitive?.content == id }
+        writeEvents(
+            if (index < 0) {
+                previous.takeLast(63) + encode(event)
+            } else {
+                previous.toMutableList().also { it[index] = encode(event) }
+            },
+        )
+    }
+
+    @Synchronized
     fun snapshot(): List<DecoderEvent> =
         readEvents().map { element ->
             val fields = element.jsonObject
@@ -60,6 +74,7 @@ class PlaybackDiagnostics(private val context: Context) {
                 fields["decoder"]?.jsonPrimitive?.content,
                 fields["hardwareAccelerated"]?.jsonPrimitive?.boolean,
                 fields["offloaded"]?.jsonPrimitive?.boolean,
+                fields["id"]?.jsonPrimitive?.content,
             )
         }
 

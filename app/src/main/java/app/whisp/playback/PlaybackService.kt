@@ -22,11 +22,11 @@ import app.whisp.data.ProgressEntity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
@@ -46,7 +46,7 @@ class PlaybackService : MediaLibraryService() {
     private var pendingLoopSeek: Pair<String?, Long>? = null
     private var automaticLoopSeek = false
     private var videoController: MediaSession.ControllerInfo? = null
-    private val decoderRecords = Mutex()
+    private val diagnosticTasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val decoderCorrelator = DecoderCorrelator(::onCorrelatedDecoder)
 
     companion object {
@@ -75,6 +75,9 @@ class PlaybackService : MediaLibraryService() {
                 .build()
         setVideoEnabled(false)
         updateAudioOffload()
+        scope.launch(Dispatchers.IO) {
+            for (task in diagnosticTasks) task()
+        }
         player.addAnalyticsListener(
             object : AnalyticsListener {
                 override fun onAudioInputFormatChanged(
@@ -121,7 +124,12 @@ class PlaybackService : MediaLibraryService() {
         player.addAudioOffloadListener(
             object : ExoPlayer.AudioOffloadListener {
                 override fun onOffloadedPlayback(offloadedPlayback: Boolean) {
-                    recordOffload(offloadedPlayback)
+                    diagnosticTasks.trySend {
+                        repository.playbackDiagnostics.record(
+                            DecoderAudit.offloaded(offloadedPlayback)
+                                .copy(id = UUID.randomUUID().toString()),
+                        )
+                    }
                 }
             },
         )
@@ -609,42 +617,33 @@ class PlaybackService : MediaLibraryService() {
                 .build()
     }
 
-    private fun recordOffload(offloaded: Boolean) {
-        // Share the decoder record lock so an offload flip cannot slip between
-        // a provisional entry and the format event that replaces it.
-        scope.launch(Dispatchers.IO) {
-            decoderRecords.withLock {
-                repository.playbackDiagnostics.record(DecoderAudit.offloaded(offloaded))
-            }
-        }
-    }
-
     private fun onCorrelatedDecoder(
         kind: String,
         snapshot: FormatSnapshot?,
         decoder: String?,
+        id: String,
         replaceProvisional: Boolean,
     ) {
-        scope.launch(Dispatchers.IO) {
-            decoderRecords.withLock {
-                val candidates = runCatching {
-                    val mime = snapshot?.mime ?: return@runCatching emptyList<CodecCandidate>()
-                    MediaCodecUtil.getDecoderInfos(mime, false, false).map {
-                        CodecCandidate(it.name, it.hardwareAccelerated)
-                    }
+        // A single consumer keeps dispatch order: launch() alone does not
+        // guarantee that coroutines start in call order.
+        diagnosticTasks.trySend {
+            val candidates = runCatching {
+                val mime = snapshot?.mime ?: return@runCatching emptyList<CodecCandidate>()
+                MediaCodecUtil.getDecoderInfos(mime, false, false).map {
+                    CodecCandidate(it.name, it.hardwareAccelerated)
                 }
-                    .getOrDefault(emptyList())
-                val event =
-                    DecoderAudit.resolve(
-                        kind,
-                        snapshot?.mime,
-                        snapshot?.codecs,
-                        decoder,
-                        candidates,
-                    )
-                if (replaceProvisional) repository.playbackDiagnostics.replaceLast(kind, event)
-                else repository.playbackDiagnostics.record(event)
             }
+                .getOrDefault(emptyList())
+            val event =
+                DecoderAudit.resolve(
+                    kind,
+                    snapshot?.mime,
+                    snapshot?.codecs,
+                    decoder,
+                    candidates,
+                ).copy(id = id)
+            if (replaceProvisional) repository.playbackDiagnostics.replaceById(id, event)
+            else repository.playbackDiagnostics.record(event)
         }
     }
 
