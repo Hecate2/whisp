@@ -3,11 +3,15 @@ package app.whisp.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.*
 import androidx.media3.session.MediaLibraryService.LibraryParams
@@ -66,6 +70,60 @@ class PlaybackService : MediaLibraryService() {
                 .setSeekForwardIncrementMs(10000)
                 .build()
         setVideoEnabled(false)
+        if (AudioOffload.supported(Build.VERSION.SDK_INT)) {
+            player.trackSelectionParameters =
+                player.trackSelectionParameters
+                    .buildUpon()
+                    .setAudioOffloadPreferences(AudioOffload.preferences())
+                    .build()
+        }
+        player.addAnalyticsListener(
+            object : AnalyticsListener {
+                private var audioFormat: Format? = null
+                private var videoFormat: Format? = null
+
+                override fun onAudioInputFormatChanged(
+                    eventTime: AnalyticsListener.EventTime,
+                    format: Format,
+                    decoderReuseEvaluation: DecoderReuseEvaluation?,
+                ) {
+                    audioFormat = format
+                }
+
+                override fun onVideoInputFormatChanged(
+                    eventTime: AnalyticsListener.EventTime,
+                    format: Format,
+                    decoderReuseEvaluation: DecoderReuseEvaluation?,
+                ) {
+                    videoFormat = format
+                }
+
+                override fun onAudioDecoderInitialized(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                    initializedTimestampMs: Long,
+                    initializationDurationMs: Long,
+                ) {
+                    recordDecoder("audio", audioFormat, decoderName)
+                }
+
+                override fun onVideoDecoderInitialized(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                    initializedTimestampMs: Long,
+                    initializationDurationMs: Long,
+                ) {
+                    recordDecoder("video", videoFormat, decoderName)
+                }
+            },
+        )
+        player.addAudioOffloadListener(
+            object : ExoPlayer.AudioOffloadListener {
+                override fun onOffloadedPlayback(offloadedPlayback: Boolean) {
+                    repository.playbackDiagnostics.record(DecoderAudit.offloaded(offloadedPlayback))
+                }
+            },
+        )
         player.addListener(
             object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -527,6 +585,26 @@ class PlaybackService : MediaLibraryService() {
                 putLong("loopEnd", loopEnd)
             },
         )
+    }
+
+    private fun recordDecoder(kind: String, format: Format?, decoderName: String) {
+        scope.launch(Dispatchers.IO) {
+            val candidates = runCatching {
+                val mime = format?.sampleMimeType ?: return@runCatching emptyList<CodecCandidate>()
+                MediaCodecUtil.getDecoderInfos(mime, false, false)
+                    .map { CodecCandidate(it.name, it.hardwareAccelerated) }
+            }
+                .getOrDefault(emptyList())
+            repository.playbackDiagnostics.record(
+                DecoderAudit.resolve(
+                    kind,
+                    format?.sampleMimeType,
+                    format?.codecs,
+                    decoderName,
+                    candidates,
+                ),
+            )
+        }
     }
 
     private fun saveProgress() {
