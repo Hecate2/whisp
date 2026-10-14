@@ -636,12 +636,13 @@ class PlaybackService : MediaLibraryService() {
                 .getOrDefault(emptyList())
             val event =
                 DecoderAudit.resolve(
-                    kind,
-                    snapshot?.mime,
-                    snapshot?.codecs,
-                    decoder,
-                    candidates,
-                ).copy(id = id)
+                        kind,
+                        snapshot?.mime,
+                        snapshot?.codecs,
+                        decoder,
+                        candidates,
+                    )
+                    .copy(id = id)
             if (replaceProvisional) repository.playbackDiagnostics.replaceById(id, event)
             else repository.playbackDiagnostics.record(event)
         }

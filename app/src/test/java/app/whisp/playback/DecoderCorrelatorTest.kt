@@ -33,9 +33,18 @@ class DecoderCorrelatorTest {
             Emission("audio", FormatSnapshot("audio/aac", null), "aac-decoder", log[0].id, true),
             log[1],
         )
-        assertEquals(Emission("audio", FormatSnapshot("audio/aac", null), "flac-decoder", log[2].id, false), log[2])
         assertEquals(
-            Emission("audio", FormatSnapshot("audio/flac", "fLaC"), "flac-decoder", log[2].id, true),
+            Emission("audio", FormatSnapshot("audio/aac", null), "flac-decoder", log[2].id, false),
+            log[2],
+        )
+        assertEquals(
+            Emission(
+                "audio",
+                FormatSnapshot("audio/flac", "fLaC"),
+                "flac-decoder",
+                log[2].id,
+                true,
+            ),
             log[3],
         )
         assertNotEquals(log[0].id, log[2].id)

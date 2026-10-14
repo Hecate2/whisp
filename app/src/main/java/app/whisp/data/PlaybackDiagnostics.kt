@@ -23,10 +23,10 @@ class PlaybackDiagnostics(private val context: Context) {
     private fun writeEvents(events: List<JsonElement>) {
         preferences.edit { putString("events", JsonArray(events).toString()) }
     }
-    private fun encode(event: DecoderEvent): JsonObject =
-        buildJsonObject {
-            event.id?.let { put("id", it) }
-            put("kind", event.kind)
+
+    private fun encode(event: DecoderEvent): JsonObject = buildJsonObject {
+        event.id?.let { put("id", it) }
+        put("kind", event.kind)
         event.mime?.let { put("mime", it) }
         event.codecs?.let { put("codecs", it) }
         event.decoder?.let { put("decoder", it) }
