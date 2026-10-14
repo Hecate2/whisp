@@ -12,8 +12,7 @@ import org.junit.Test
 class DlsiteClientTest {
     @Test
     fun commercialVoiceUsesItsOfficialStoreAndBrandMetadata() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 MockResponse.Builder()
                     .body(
@@ -38,8 +37,7 @@ class DlsiteClientTest {
 
     @Test
     fun officialFieldsReplaceCatalogMetadataWithoutChangingAudioIdentity() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.dispatcher =
                 object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest) =
@@ -79,8 +77,7 @@ class DlsiteClientTest {
 
     @Test
     fun unavailableFullEndpointFallsBackToOfficialKeyedInfo() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(MockResponse.Builder().code(503).build())
             server.enqueue(MockResponse.Builder().body(info).build())
             assertEquals(
@@ -115,8 +112,7 @@ class DlsiteClientTest {
 
     @Test
     fun cancellationStopsTheOfficialRequest() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             repeat(2) {
                 server.enqueue(
                     MockResponse.Builder().body(info).bodyDelay(3, TimeUnit.SECONDS).build(),

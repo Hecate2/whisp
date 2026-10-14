@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 package app.whisp.data
 
-import android.app.Application
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import mockwebserver3.*
@@ -13,10 +12,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
-import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class)
 class DlsiteAccountClientTest {
     @Before
     fun initializeHttp() {
@@ -112,8 +109,7 @@ class DlsiteAccountClientTest {
 
     @Test
     fun purchasedAudioIsBatchedLocalizedAndIncrementallyRequested() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(body("""{"customer_id":7}"""))
             server.enqueue(body("""{"user":2,"production":0,"page_limit":100}"""))
             server.enqueue(
@@ -155,8 +151,7 @@ class DlsiteAccountClientTest {
 
     @Test
     fun malformedCommercialPageCannotAdvanceThePurchaseSync() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(body("""{"customer_id":7}"""))
             server.enqueue(body("""{"user":0,"production":1,"page_limit":100}"""))
             server.enqueue(body("""{"error":"temporary failure"}"""))
@@ -179,8 +174,7 @@ class DlsiteAccountClientTest {
 
     @Test
     fun workResponseMustBelongToTheRequestedPurchase() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(body(owned.replace("RJ00000001", "RJ00000002")))
             val client =
                 DlsiteAccountClient(
@@ -200,8 +194,7 @@ class DlsiteAccountClientTest {
 
     @Test
     fun missingAuthenticationAndUnownedWorkHaveActionableFailures() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             val client =
                 DlsiteAccountClient(
                     DlsiteSession(),
@@ -228,8 +221,7 @@ class DlsiteAccountClientTest {
 
     @Test
     fun expiredMediaAuthorizationIsRefreshedOnceAndRedirectsStayPrivate() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             val client =
                 DlsiteAccountClient(
                     DlsiteSession(),
@@ -324,8 +316,7 @@ class DlsiteAccountClientTest {
                 emptyMap(),
             ),
         )
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(body("""{"expires":"2099-01-01T00:00:00Z"}"""))
             val client =
                 DlsiteAccountClient(

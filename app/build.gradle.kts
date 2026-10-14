@@ -87,6 +87,13 @@ android {
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
+// Unit test classes are independent (no fixed ports or shared dirs),
+// so spread them across forks instead of Gradle's single-fork default.
+tasks.withType<org.gradle.api.tasks.testing.Test> {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 8)
+    maxHeapSize = "2g"
+}
+
 kotlin { compilerOptions { allWarningsAsErrors.set(true) } }
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }

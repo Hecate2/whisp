@@ -8,7 +8,6 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -20,8 +19,7 @@ class AsmrOneClientTest {
 
     @Test
     fun videoNodesUseActualContainerDurationAndSharedSubtitleMatching() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 response(
                     """[
@@ -80,8 +78,7 @@ class AsmrOneClientTest {
 
     @Test
     fun catalogUsesEncodedSearchFixedPagesFiltersAndPublicHeaders() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(response("""{"works":[$work],"pagination":{"totalCount":41}}"""))
             val client = AsmrOneClient(okhttp3.OkHttpClient(), server.url("/"))
             val page = client.catalog(2, "示例/声优", "dl_count", true)
@@ -102,8 +99,7 @@ class AsmrOneClientTest {
 
     @Test
     fun metadataUsesCaseSensitiveEndpointAndCanonicalEightDigitCode() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 response("""{"id":1000001,"title":"示例作品","circle":{"name":"示例社团"},"vas":null}"""),
             )
@@ -117,8 +113,7 @@ class AsmrOneClientTest {
 
     @Test
     fun indexingPreservesVariantsSubtitlesBonusDurationsAndStableIdentity() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             val tree =
                 """[
                 {"type":"folder","title":"MP3","children":[
@@ -152,8 +147,7 @@ class AsmrOneClientTest {
 
     @Test
     fun audioTitlesWithPunctuationKeepTheActualMediaFormat() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 response(
                     """[
@@ -176,8 +170,7 @@ class AsmrOneClientTest {
 
     @Test
     fun resourceUrlsRequireHttpsAndSeparateCredentials() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             for (url in
                 listOf(
                     "http://media.example/cover.jpg",
@@ -194,8 +187,7 @@ class AsmrOneClientTest {
 
     @Test
     fun httpErrorsRemainRetryableAndEmptyFinalPagesStopPagination() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(MockResponse.Builder().code(503).body("unavailable").build())
             server.enqueue(response("""{"works":[],"pagination":{"totalCount":40}}"""))
             val client = AsmrOneClient(okhttp3.OkHttpClient(), server.url("/"))
@@ -222,8 +214,7 @@ class AsmrOneClientTest {
 
     @Test
     fun cancellationStopsTheNetworkRequest() = runBlocking {
-        MockWebServer().use { server ->
-            server.start()
+        withMockServer { server ->
             server.enqueue(
                 MockResponse.Builder()
                     .body("""{"works":[]}""")
