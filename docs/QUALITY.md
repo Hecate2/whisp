@@ -17,6 +17,33 @@ export WHISP_BLACK="$PWD/.venv/bin/black"
 
 `fmt` 统一排版，`qualityCheck` 执行格式检查、公开内容检查、单元测试及 Debug / Release Lint。GitHub Actions 对推送和 Pull Request 执行同一套检查，并编译 Release 和设备测试 APK。
 
+## 构建速度
+
+Gradle 默认启用任务输出缓存和配置缓存。本地连续构建复用 daemon；相同任务和输入复用已配置的任务图。构建缓存由 `setup-gradle` 在 CI 中保存，Kotlin、KSP、Lint 与测试任务可以复用匹配的输出。缓存行为遵循 [Gradle 构建缓存](https://docs.gradle.org/current/userguide/build_cache.html)和[配置缓存](https://docs.gradle.org/current/userguide/configuration_cache.html)的输入校验。
+
+启用 `WHISP_SMB_TEST_CONFIG` 时，单元测试每次实际执行，以校验当前 Samba 服务状态。
+
+日常构建通过 `abis` 指定设备架构，多个架构以逗号分隔：
+
+```sh
+./gradlew -Pabis=arm64-v8a :app:assembleDebug
+./gradlew -Pabis=x86_64 -PsmokeTest :app:assembleSmoke :app:assembleSmokeAndroidTest
+```
+
+CI 的质量检查与设备测试 APK 使用 `x86_64`；发布构建独立执行 `-PsplitApks :app:assembleRelease`，覆盖四种 ABI 与通用 APK。两个阶段共用 Gradle daemon 和任务输出缓存，Release Lint 仍属于质量检查。
+
+原生编译可通过 Debian 的 ccache 复用 libnfs 与 JNI 的编译结果：
+
+```sh
+sudo apt-get install ccache
+./gradlew -Pccache -Pabis=arm64-v8a :app:assembleDebug
+ccache --show-stats
+```
+
+CI 将 ccache 容量限制为 200 MiB，以 NDK、CMake 版本和原生源码生成缓存键。主分支成功构建写入缓存，Pull Request 读取缓存。Gradle 配置缓存保存在本地 `.gradle/`；GitHub 的配置缓存跨运行复用需要 `setup-gradle` 的加密密钥，当前 CI 由该 action 保存依赖和任务输出缓存。
+
+通过 `./gradlew … --profile` 查看本机构建各阶段耗时，报告位于 `build/reports/profile/`。比较时使用相同任务、架构和 daemon 状态，并区分首次构建、清理后的缓存恢复和增量构建。
+
 ## 依赖版本
 
 2026-10-12 按 [Google Maven](https://maven.google.com/) 和 [Maven Central](https://central.sonatype.com/) 发布信息升级直接依赖，版本在构建脚本中固定。常规组件采用最新稳定版；Material 3 使用当前 Beta 的动效接口。

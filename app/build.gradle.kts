@@ -10,7 +10,18 @@ plugins {
 
 val releaseSecretsFile = rootProject.file(".signing/signing.properties")
 val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+val buildAbis =
+    providers
+        .gradleProperty("abis")
+        .map { it.split(',').map(String::trim).distinct() }
+        .getOrElse(supportedAbis)
+
+require(buildAbis.isNotEmpty() && buildAbis.all { it in supportedAbis }) {
+    "abis must contain supported architectures: ${supportedAbis.joinToString()}"
+}
+
 val splitApks = providers.gradleProperty("splitApks").isPresent
+val useCcache = providers.gradleProperty("ccache").isPresent
 val releaseSecrets =
     Properties().apply {
         if (releaseSecretsFile.isFile) releaseSecretsFile.inputStream().use { load(it) }
@@ -33,14 +44,22 @@ android {
         versionCode = 18
         versionName = "0.4.0-rc.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
-        if (!splitApks) ndk { abiFilters += supportedAbis }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_static"
+                if (useCcache) {
+                    arguments += "-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+                    arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                }
+            }
+        }
+        if (!splitApks) ndk { abiFilters += buildAbis }
     }
     splits {
         abi {
             isEnable = splitApks
             reset()
-            include(*supportedAbis.toTypedArray())
+            include(*buildAbis.toTypedArray())
             isUniversalApk = true
         }
     }
@@ -90,6 +109,15 @@ android {
 kotlin { compilerOptions { allWarningsAsErrors.set(true) } }
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+val liveSmbTests = providers.environmentVariable("WHISP_SMB_TEST_CONFIG").isPresent
+
+tasks.withType<Test>().configureEach {
+    if (liveSmbTests) {
+        outputs.upToDateWhen { false }
+        outputs.doNotCacheIf("Live SMB tests depend on the current server state") { true }
+    }
+}
 
 dependencies {
     constraints {

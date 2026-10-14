@@ -17,6 +17,11 @@ jobs:
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.gradle/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 200M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,11 +34,29 @@ jobs:
         with:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Restore native compiler cache
+        id: native-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: native-${{ runner.os }}-ndk30.0.16248370-cmake3.31.6-v1-${{ hashFiles('app/src/main/cpp/**') }}
+          restore-keys: native-${{ runner.os }}-ndk30.0.16248370-cmake3.31.6-v1-
       - name: Set up tools
         run: |
           python3 -m pip install black==26.10.1
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-format-19
+          sudo apt-get install -y --no-install-recommends clang-format-19 ccache
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0" "ndk;30.0.16248370" "cmake;3.31.6"
       - name: Check and build
-        run: ./gradlew -PsplitApks qualityCheck :app:assembleRelease :app:assembleDebugAndroidTest --no-daemon
+        run: |
+          ./gradlew -Pccache -Pabis=x86_64 qualityCheck :app:assembleDebugAndroidTest
+          ./gradlew -Pccache -PsplitApks :app:assembleRelease
+      - name: Native cache statistics
+        if: always()
+        run: ccache --show-stats
+      - name: Save native compiler cache
+        if: success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
