@@ -146,7 +146,7 @@ internal fun PlayerPage(
                 }
             }
             Text(
-                detail.work.title.substringAfter('～', detail.work.title).trim('～'),
+                shortTitle(detail.work.title),
                 fontSize = 25.sp,
                 lineHeight = 32.sp,
                 fontFamily = FontFamily.Serif,
@@ -207,15 +207,7 @@ internal fun PlayerPage(
                 onSelect = { subtitleAction = it },
                 onRetry = { model.retrySubtitles(track.id) },
                 onBookmark = { cue ->
-                    bookmark =
-                        BookmarkDraft(
-                            track.id,
-                            (cue.startMs + settings.subtitleOffsetMs).coerceAtLeast(0),
-                            (cue.endMs + settings.subtitleOffsetMs).takeIf {
-                                cue.endMs != Long.MAX_VALUE
-                            },
-                            cue.text,
-                        )
+                    bookmark = BookmarkDraft.fromCue(track.id, cue, settings.subtitleOffsetMs)
                 },
             )
         }
@@ -287,8 +279,7 @@ internal fun PlayerPage(
                     ) {
                         Icon(
                             if (state.playWhenReady) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            if (state.playWhenReady) "暂停"
-                            else if (state.failed) "重试播放" else if (state.ended) "重新播放作品" else "播放",
+                            playControlLabel(state),
                             Modifier.size(32.dp).graphicsLayer {
                                 scaleX = scale
                                 scaleY = scale
@@ -464,10 +455,9 @@ internal fun PlayerPage(
                                         (position - settings.subtitleOffsetMs).coerceAtLeast(0),
                                     )
                                 bookmark =
-                                    BookmarkDraft(
+                                    BookmarkDraft.atPosition(
                                         track.id,
                                         position,
-                                        null,
                                         cues.getOrNull(cueIndex)?.text ?: track.title,
                                     )
                                 dismiss()
@@ -592,15 +582,7 @@ internal fun PlayerPage(
             }
             TextButton(
                 onClick = {
-                    bookmark =
-                        BookmarkDraft(
-                            track.id,
-                            (cue.startMs + settings.subtitleOffsetMs).coerceAtLeast(0),
-                            (cue.endMs + settings.subtitleOffsetMs).takeIf {
-                                cue.endMs != Long.MAX_VALUE
-                            },
-                            cue.text,
-                        )
+                    bookmark = BookmarkDraft.fromCue(track.id, cue, settings.subtitleOffsetMs)
                     dismiss()
                 },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
@@ -648,14 +630,9 @@ internal fun PlayerPage(
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(clock(target), fontSize = 28.sp, color = Rose)
-                    val sliderState =
-                        rememberSliderState(
-                            value = target.toFloat(),
-                            trackRange = start.toFloat()..end.toFloat(),
-                        )
-                    sliderState.value = target.toFloat()
-                    Slider(
-                        state = sliderState,
+                    SyncedSlider(
+                        target.toFloat(),
+                        start.toFloat()..end.toFloat(),
                         onValueChange = { target = it.toLong() },
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -695,15 +672,10 @@ internal fun PlayerPage(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text("字幕字号")
-                    val sliderState =
-                        rememberSliderState(
-                            value = settings.subtitleSize.toFloat(),
-                            trackRange = 16f..30f,
-                            steps = 13,
-                        )
-                    sliderState.value = settings.subtitleSize.toFloat()
-                    Slider(
-                        state = sliderState,
+                    SyncedSlider(
+                        settings.subtitleSize.toFloat(),
+                        16f..30f,
+                        steps = 13,
                         onValueChange = {
                             model.action { model.repository.setSettings(size = it.roundToInt()) }
                         },
@@ -782,13 +754,6 @@ internal fun PlayerPage(
             confirmButton = { TextButton(onClick = { preferences = false }) { Text("完成") } },
         )
 }
-
-private data class BookmarkDraft(
-    val trackId: String,
-    val position: Long,
-    val end: Long?,
-    val title: String,
-)
 
 @Composable
 private fun SubtitlePane(

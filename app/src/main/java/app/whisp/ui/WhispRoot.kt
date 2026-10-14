@@ -155,7 +155,7 @@ fun clock(ms: Long): String {
     else "%02d:%02d".format(seconds / 60, seconds % 60)
 }
 
-private fun shortTitle(value: String) = value.substringAfter('～', value).trim('～', ' ', '【', '】')
+internal fun shortTitle(value: String) = value.substringAfter('～', value).trim('～', ' ', '【', '】')
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -601,8 +601,7 @@ private fun MiniPlayer(
         }
         IconAction(
             if (state.playWhenReady) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            if (state.playWhenReady) "暂停"
-            else if (state.failed) "重试播放" else if (state.ended) "重新播放作品" else "播放",
+            playControlLabel(state),
             Rose,
             model::togglePlay,
         )
