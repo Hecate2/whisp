@@ -142,7 +142,9 @@ class SmbIntegrationTest {
             }
             waitFor { playing() }
             assertTrue(runBlocking { repo.readAsset(track.subtitleId!!) }.isNotEmpty())
-            assertTrue(repo.offlineStore.isOffline(runBlocking { repo.dao.details(detail.work.id)!! }))
+            assertTrue(
+                repo.offlineStore.isOffline(runBlocking { repo.dao.details(detail.work.id)!! }),
+            )
             instrumentation.runOnMainSync { controller.pause() }
         } finally {
             instrumentation.runOnMainSync { MediaController.releaseFuture(future) }
