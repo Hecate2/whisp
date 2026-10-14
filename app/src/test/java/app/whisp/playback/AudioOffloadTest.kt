@@ -24,4 +24,20 @@ class AudioOffloadTest {
         assertTrue(preferences.isGaplessSupportRequired)
         assertFalse(preferences.isSpeedChangeSupportRequired)
     }
+
+    @Test
+    fun preciseDeadlinesDisableOffload() {
+        assertEquals(
+            TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED,
+            AudioOffload.preferences(false).audioOffloadMode,
+        )
+    }
+
+    @Test
+    fun loopOrTimerNeedsPreciseDeadline() {
+        assertTrue(AudioOffload.needsPreciseDeadline(1_000, 5_000, 0))
+        assertTrue(AudioOffload.needsPreciseDeadline(-1, -1, 1_000_000))
+        assertFalse(AudioOffload.needsPreciseDeadline(-1, -1, 0))
+        assertFalse(AudioOffload.needsPreciseDeadline(5_000, 5_000, 0))
+    }
 }

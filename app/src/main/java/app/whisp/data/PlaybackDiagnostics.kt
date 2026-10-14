@@ -15,32 +15,47 @@ class PlaybackDiagnostics(private val context: Context) {
     private val preferences =
         context.getSharedPreferences("playback-diagnostics", Context.MODE_PRIVATE)
 
-    @Synchronized
-    fun record(event: DecoderEvent) {
-        val previous = runCatching {
+    private fun readEvents(): JsonArray =
+        runCatching {
             Json.parseToJsonElement(preferences.getString("events", "[]")!!).jsonArray
         }
             .getOrDefault(JsonArray(emptyList()))
-        val next =
-            previous.takeLast(63) +
-                buildJsonObject {
-                    put("kind", event.kind)
-                    event.mime?.let { put("mime", it) }
-                    event.codecs?.let { put("codecs", it) }
-                    event.decoder?.let { put("decoder", it) }
-                    event.hardwareAccelerated?.let { put("hardwareAccelerated", it) }
-                    event.offloaded?.let { put("offloaded", it) }
-                }
-        preferences.edit { putString("events", JsonArray(next).toString()) }
+
+    private fun writeEvents(events: List<JsonElement>) {
+        preferences.edit { putString("events", JsonArray(events).toString()) }
+    }
+
+    private fun encode(event: DecoderEvent): JsonObject =
+        buildJsonObject {
+            put("kind", event.kind)
+            event.mime?.let { put("mime", it) }
+            event.codecs?.let { put("codecs", it) }
+            event.decoder?.let { put("decoder", it) }
+            event.hardwareAccelerated?.let { put("hardwareAccelerated", it) }
+            event.offloaded?.let { put("offloaded", it) }
+        }
+
+    @Synchronized
+    fun record(event: DecoderEvent) {
+        writeEvents(readEvents().takeLast(63) + encode(event))
     }
 
     @Synchronized
-    fun snapshot(): List<DecoderEvent> {
-        val events = runCatching {
-            Json.parseToJsonElement(preferences.getString("events", "[]")!!).jsonArray
-        }
-            .getOrDefault(JsonArray(emptyList()))
-        return events.map { element ->
+    fun replaceLast(kind: String, event: DecoderEvent) {
+        val previous = readEvents()
+        val encoded = encode(event)
+        writeEvents(
+            if (
+                previous.lastOrNull()?.jsonObject?.get("kind")?.jsonPrimitive?.content == kind
+            )
+                previous.dropLast(1) + encoded
+            else previous.takeLast(63) + encoded,
+        )
+    }
+
+    @Synchronized
+    fun snapshot(): List<DecoderEvent> =
+        readEvents().map { element ->
             val fields = element.jsonObject
             DecoderEvent(
                 fields["kind"]!!.jsonPrimitive.content,
@@ -51,7 +66,6 @@ class PlaybackDiagnostics(private val context: Context) {
                 fields["offloaded"]?.jsonPrimitive?.boolean,
             )
         }
-    }
 
     @Synchronized
     fun clear() {
@@ -59,10 +73,7 @@ class PlaybackDiagnostics(private val context: Context) {
     }
 
     fun shareIntent(): Intent {
-        val events = runCatching {
-            Json.parseToJsonElement(preferences.getString("events", "[]")!!)
-        }
-            .getOrDefault(JsonArray(emptyList()))
+        val events = readEvents()
         val report = buildJsonObject {
             put("schema", 1)
             put("androidSdk", Build.VERSION.SDK_INT)
