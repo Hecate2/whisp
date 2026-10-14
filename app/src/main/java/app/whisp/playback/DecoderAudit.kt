@@ -5,7 +5,7 @@ package app.whisp.playback
 internal data class CodecCandidate(val name: String, val hardwareAccelerated: Boolean)
 
 /** One decoder or offload observation for the playback diagnostic report. */
-internal data class DecoderEvent(
+data class DecoderEvent(
     val kind: String,
     val mime: String?,
     val codecs: String?,
