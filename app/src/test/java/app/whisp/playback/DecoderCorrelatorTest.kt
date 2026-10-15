@@ -204,5 +204,4 @@ class DecoderCorrelatorTest {
         assertEquals("flac-decoder", flacEntries.last().decoder)
         assertTrue(flacEntries.none { it.decoder == "aac-decoder" })
     }
-
 }
