@@ -98,6 +98,7 @@ class PlaybackService : MediaLibraryService() {
                     decoderCorrelator.onFormatChanged(
                         "audio",
                         FormatSnapshot(format.sampleMimeType, format.codecs),
+                        formatContinuity(decoderReuseEvaluation),
                     )
                 }
 
@@ -109,6 +110,7 @@ class PlaybackService : MediaLibraryService() {
                     decoderCorrelator.onFormatChanged(
                         "video",
                         FormatSnapshot(format.sampleMimeType, format.codecs),
+                        formatContinuity(decoderReuseEvaluation),
                     )
                 }
 
