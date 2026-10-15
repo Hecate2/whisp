@@ -28,29 +28,30 @@ internal fun formatContinuity(evaluation: DecoderReuseEvaluation?): FormatContin
     }
 
 /**
- * Pairs each decoder initialization with the input format event from the same
- * renderer call. Renderers initialize the codec before dispatching the format
- * event, so recording at init time would read a stale or missing format.
+ * Pairs each decoder initialization with the input format event from the same renderer call.
+ * Renderers initialize the codec before dispatching the format event, so recording at init time
+ * would read a stale or missing format.
  *
- * A pending pairing always wins over the evaluation: init and its format stay
- * adjacent in the per-kind event stream. An init without a following format is
- * always an in-place recovery, where the cached format is still current.
+ * A pending pairing always wins over the evaluation: init and its format stay adjacent in the
+ * per-kind event stream. An init without a following format is always an in-place recovery, where
+ * the cached format is still current.
  *
- * A release always precedes the next init of the same renderer; only the
- * decoder name is cleared, never a pending pairing. After a release, a format
- * without a new init is bypass and keeps a null decoder.
+ * A release always precedes the next init of the same renderer; only the decoder name is cleared,
+ * never a pending pairing. After a release, a format without a new init is bypass and keeps a null
+ * decoder.
  *
- * Every emission carries a stable id so the sink can replace the provisional
- * entry in place, no matter what was recorded after it.
+ * Every emission carries a stable id so the sink can replace the provisional entry in place, no
+ * matter what was recorded after it.
  */
 internal class DecoderCorrelator(
-    private val sink: (
-        kind: String,
-        snapshot: FormatSnapshot?,
-        decoder: String?,
-        id: String,
-        replaceProvisional: Boolean,
-    ) -> Unit,
+    private val sink:
+        (
+            kind: String,
+            snapshot: FormatSnapshot?,
+            decoder: String?,
+            id: String,
+            replaceProvisional: Boolean,
+        ) -> Unit,
 ) {
     private val cached = mutableMapOf<String, FormatSnapshot?>()
     private val lastDecoder = mutableMapOf<String, String?>()

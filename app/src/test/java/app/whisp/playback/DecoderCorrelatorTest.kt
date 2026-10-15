@@ -26,9 +26,17 @@ class DecoderCorrelatorTest {
         // A fresh init dispatches before its format event, so the pending
         // pairing wins no matter what the evaluation says.
         correlator.onDecoderInitialized("audio", "aac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
         correlator.onDecoderInitialized("audio", "flac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/flac", "fLaC"), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/flac", "fLaC"),
+            FormatContinuity.BYPASS,
+        )
         assertEquals(4, log.size)
         assertEquals(Emission("audio", null, "aac-decoder", log[0].id, false), log[0])
         assertEquals(
@@ -40,7 +48,13 @@ class DecoderCorrelatorTest {
             log[2],
         )
         assertEquals(
-            Emission("audio", FormatSnapshot("audio/flac", "fLaC"), "flac-decoder", log[2].id, true),
+            Emission(
+                "audio",
+                FormatSnapshot("audio/flac", "fLaC"),
+                "flac-decoder",
+                log[2].id,
+                true,
+            ),
             log[3],
         )
         assertNotEquals(log[0].id, log[2].id)
@@ -51,7 +65,11 @@ class DecoderCorrelatorTest {
         val log = mutableListOf<Emission>()
         val correlator = correlator(log)
         correlator.onDecoderInitialized("video", "avc-decoder")
-        correlator.onFormatChanged("video", FormatSnapshot("video/avc", "avc1"), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "video",
+            FormatSnapshot("video/avc", "avc1"),
+            FormatContinuity.BYPASS,
+        )
         assertEquals(2, log.size)
         assertEquals(log[0].id, log[1].id)
         assertEquals(
@@ -65,9 +83,17 @@ class DecoderCorrelatorTest {
         val log = mutableListOf<Emission>()
         val correlator = correlator(log)
         correlator.onDecoderInitialized("audio", "aac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
         // No re-init: the continuing decoder still applies.
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", "mp4a"), FormatContinuity.REUSE)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", "mp4a"),
+            FormatContinuity.REUSE,
+        )
         assertEquals(3, log.size)
         assertEquals(
             Emission("audio", FormatSnapshot("audio/aac", "mp4a"), "aac-decoder", log[2].id, false),
@@ -81,8 +107,16 @@ class DecoderCorrelatorTest {
         val correlator = correlator(log)
         correlator.onDecoderInitialized("audio", "aac-decoder")
         correlator.onDecoderInitialized("video", "avc-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
-        correlator.onFormatChanged("video", FormatSnapshot("video/avc", null), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
+        correlator.onFormatChanged(
+            "video",
+            FormatSnapshot("video/avc", null),
+            FormatContinuity.BYPASS,
+        )
         assertEquals(4, log.size)
         assertEquals(log[0].id, log[2].id)
         assertEquals(log[1].id, log[3].id)
@@ -96,9 +130,17 @@ class DecoderCorrelatorTest {
         val correlator = correlator(log)
         // init AAC -> format AAC -> release AAC -> MP3 bypass format.
         correlator.onDecoderInitialized("audio", "aac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
         correlator.onDecoderReleased("audio")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/mpeg", "mp3"), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/mpeg", "mp3"),
+            FormatContinuity.BYPASS,
+        )
         assertEquals(3, log.size)
         assertEquals(
             Emission("audio", FormatSnapshot("audio/mpeg", "mp3"), null, log[2].id, false),
@@ -111,11 +153,19 @@ class DecoderCorrelatorTest {
         val log = mutableListOf<Emission>()
         val correlator = correlator(log)
         correlator.onDecoderInitialized("audio", "aac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
         correlator.onDecoderReleased("audio")
         // The released init never produced output; the bypass format replaces it in place.
         correlator.onDecoderInitialized("audio", "mp3-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/mpeg", "mp3"), FormatContinuity.BYPASS)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/mpeg", "mp3"),
+            FormatContinuity.BYPASS,
+        )
         assertEquals(4, log.size)
         assertEquals(log[2].id, log[3].id)
         assertEquals(
@@ -131,11 +181,23 @@ class DecoderCorrelatorTest {
         // init AAC -> format AAC -> format FLAC (rebuild scheduled, drain pending)
         // -> release AAC -> init FLAC -> format FLAC.
         correlator.onDecoderInitialized("audio", "aac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/aac", null), FormatContinuity.BYPASS)
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/flac", "fLaC"), FormatContinuity.REBUILD)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/aac", null),
+            FormatContinuity.BYPASS,
+        )
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/flac", "fLaC"),
+            FormatContinuity.REBUILD,
+        )
         correlator.onDecoderReleased("audio")
         correlator.onDecoderInitialized("audio", "flac-decoder")
-        correlator.onFormatChanged("audio", FormatSnapshot("audio/flac", "fLaC"), FormatContinuity.REUSE)
+        correlator.onFormatChanged(
+            "audio",
+            FormatSnapshot("audio/flac", "fLaC"),
+            FormatContinuity.REUSE,
+        )
         val flacEntries = log.filter { it.snapshot?.mime == "audio/flac" }
         // Provisional, in-place decoder update, then the paired format: one id throughout.
         assertEquals(3, flacEntries.size)
